@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#d9d3cb">
-<title>わらいしくんラン ～庵治石のまちを走れ！～</title>
+<title>わらいしくんラン ～春日川を走れ！～</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; background: #d9d3cb; overflow: hidden; touch-action: manipulation; }
@@ -14,7 +14,7 @@
     -webkit-user-select: none; user-select: none;
   }
   #wrap { position: relative; }
-  canvas { display: block; border-radius: 0; }
+  canvas { display: block; }
   #mute {
     position: absolute; top: 10px; right: 10px; width: 40px; height: 40px;
     border: 2px solid #2e2e2e; border-radius: 50%; background: #f4f1ec;
@@ -31,7 +31,8 @@
 (() => {
   // ===== 基本設定 =====
   const W = 400, H = 700;            // 論理解像度(縦長スマホ向け)
-  const GROUND = 560;                // 地面のY座標
+  const GROUND = 560;                // 走る道のY座標
+  const RIVER_TOP = 452, RIVER_BOTTOM = 506; // 春日川の水面
   const COL = { light: '#d9d3cb', mid: '#b3aa9c', dark: '#2e2e2e', pink: '#ebcaca', paper: '#f4f1ec', side: '#a59c8e' };
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d');
@@ -50,7 +51,15 @@
   window.addEventListener('resize', resize);
   resize();
 
-  // ===== サウンド(WebAudio の簡単な効果音) =====
+  // ===== わらいしくんの絵(キャラクター資料から切り出したもの) =====
+  const IMG = {};
+  ['head_main', 'head_happy', 'head_surprise', 'head_tehe', 'head_sad', 'torso'].forEach(n => {
+    const im = new Image(); im.src = `assets/sprites/${n}.png`; IMG[n] = im;
+  });
+  const FACE_IMG = { normal: 'head_main', happy: 'head_happy', surprise: 'head_surprise', tehe: 'head_tehe', sad: 'head_sad' };
+  const ready = im => im && im.complete && im.naturalWidth > 0;
+
+  // ===== サウンド =====
   let audio = null, muted = localStorage.getItem('waraishi_mute') === '1';
   const muteBtn = document.getElementById('mute');
   muteBtn.textContent = muted ? '🔇' : '🔊';
@@ -86,24 +95,39 @@
     '庵治・牟礼には、石を切り出し・加工する職人さんがたくさんいるよ。',
   ];
 
+  // ===== 香川の特産品(たまに出てくるボーナスアイテム) =====
+  const SPECIALS = [
+    { id: 'udon',   name: '讃岐うどん', text: '香川といえば うどん！「うどん県」と名乗るほど！' },
+    { id: 'glove',  name: '手袋',       text: '東かがわ市は、日本一の手袋の産地なんだ！' },
+    { id: 'olive',  name: 'オリーブ',   text: '小豆島は、日本のオリーブ栽培発祥の地！' },
+    { id: 'chicken',name: '骨付鳥',     text: '丸亀生まれ！スパイスのきいた鶏もも焼き' },
+    { id: 'uchiwa', name: '丸亀うちわ', text: '丸亀は、うちわの生産量が全国トップクラス！' },
+  ];
+  const SPECIAL_BONUS = 100;
+
   // ===== ゲーム状態 =====
-  const best0 = Number(localStorage.getItem('waraishi_best') || 0);
   const S = {
     mode: 'title',       // title | play | over
-    t: 0, speed: 0, dist: 0, score: 0, stones: 0, best: best0,
-    obstacles: [], items: [], particles: [], clouds: [], hills: [],
-    spawnT: 0, itemT: 0, trivia: '', overT: 0, newBest: false, shake: 0,
+    t: 0, speed: 0, dist: 0, score: 0, stones: 0, bonus: 0, got: [],
+    best: Number(localStorage.getItem('waraishi_best') || 0),
+    obstacles: [], items: [], specials: [], particles: [], clouds: [],
+    spawnT: 0, itemT: 0, specialT: 0, trivia: '', overT: 0, newBest: false, shake: 0,
+    banner: null,          // 特産品をとったときの表示
+    landmark: null,        // 高松大学など、たまに出てくる景色
+    landmarkT: 0, signX: 120, scroll: 0,
   };
-  const P = { x: 90, y: GROUND, vy: 0, jumps: 0, onGround: true, face: 'happy', faceT: 0, run: 0, squash: 0 };
-  const PW = 58, PH = 60;  // 頭(石)のサイズ
+  const P = { x: 90, y: GROUND, vy: 0, jumps: 0, onGround: true, face: 'normal', faceT: 0, run: 0, squash: 0 };
 
-  for (let i = 0; i < 4; i++) S.clouds.push({ x: Math.random() * W, y: 60 + Math.random() * 180, s: 0.6 + Math.random() * 0.6 });
-  for (let i = 0; i < 3; i++) S.hills.push({ x: i * 220, w: 260 + Math.random() * 80, h: 70 + Math.random() * 60 });
+  for (let i = 0; i < 4; i++) S.clouds.push({ x: Math.random() * W, y: 50 + Math.random() * 170, s: 0.6 + Math.random() * 0.6 });
 
   function reset() {
-    S.mode = 'play'; S.t = 0; S.speed = 5.2; S.dist = 0; S.score = 0; S.stones = 0;
-    S.obstacles = []; S.items = []; S.particles = []; S.spawnT = 60; S.itemT = 90; S.newBest = false;
-    P.y = GROUND; P.vy = 0; P.jumps = 0; P.onGround = true; P.face = 'happy'; P.faceT = 0;
+    Object.assign(S, {
+      mode: 'play', t: 0, speed: 5.2, dist: 0, score: 0, stones: 0, bonus: 0, got: [],
+      obstacles: [], items: [], specials: [], particles: [], spawnT: 60, itemT: 90,
+      specialT: 420 + Math.random() * 240, newBest: false, banner: null,
+      landmark: null, landmarkT: 900, signX: 260,
+    });
+    Object.assign(P, { y: GROUND, vy: 0, jumps: 0, onGround: true, face: 'normal', faceT: 0 });
   }
 
   // ===== 入力 =====
@@ -128,29 +152,25 @@
   function dust(x, y) {
     S.particles.push({ x: x + (Math.random() - 0.5) * 30, y, vx: -1 - Math.random() * 2, vy: -Math.random() * 2, life: 25, r: 3 + Math.random() * 4, c: COL.mid });
   }
-  function sparkle(x, y) {
-    for (let i = 0; i < 10; i++) {
+  function sparkle(x, y, n = 10) {
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = 2 + Math.random() * 3;
       S.particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 30, r: 2 + Math.random() * 3, c: i % 2 ? '#f2c94c' : COL.paper });
     }
   }
 
-  // ===== 障害物 =====
-  // lantern: 石灯籠 / rocks: 石ころの山 / crow: 空を飛ぶカラス / chisel: 職人のノミ(高い)
+  // ===== 障害物・アイテムの出現 =====
   function spawnObstacle() {
     const lvl = Math.min(1, S.dist / 6000);
     const r = Math.random();
     let o;
     if (r < 0.35) o = { type: 'rocks', w: 46, h: 34 };
     else if (r < 0.65) o = { type: 'lantern', w: 40, h: 78 };
-    else if (r < 0.85 && S.dist > 800) o = { type: 'crow', w: 44, h: 26, fy: GROUND - 120 - Math.random() * 40, flap: 0 };
+    else if (r < 0.85 && S.dist > 800) o = { type: 'crow', w: 44, h: 26, fy: GROUND - 130 - Math.random() * 40, flap: 0 };
     else o = { type: 'rocks', w: 70, h: 40 };
     o.x = W + 20;
     S.obstacles.push(o);
-    // 次の出現までの間隔(速くなるほど詰まる)
-    const base = 95 - lvl * 35;
-    S.spawnT = base + Math.random() * 55;
-    // たまに連続配置
+    S.spawnT = (95 - lvl * 35) + Math.random() * 55;
     if (lvl > 0.3 && Math.random() < 0.25 && o.type === 'rocks') {
       S.obstacles.push({ type: 'rocks', w: 46, h: 34, x: o.x + o.w + 150 + S.speed * 6 });
       S.spawnT += 40;
@@ -158,8 +178,16 @@
   }
   function spawnItem() {
     const high = Math.random() < 0.5;
-    S.items.push({ x: W + 20, y: high ? GROUND - 170 : GROUND - 70, r: 13, t: 0 });
+    S.items.push({ x: W + 20, y: high ? GROUND - 180 : GROUND - 80, r: 13, t: 0 });
     S.itemT = 70 + Math.random() * 90;
+  }
+  function spawnSpecial() {
+    // まだとっていない特産品を優先して出す
+    const left = SPECIALS.filter(s => !S.got.includes(s.id));
+    const pool = left.length ? left : SPECIALS;
+    const sp = pool[Math.floor(Math.random() * pool.length)];
+    S.specials.push({ ...sp, x: W + 30, y: GROUND - 150 - Math.random() * 50, t: 0 });
+    S.specialT = 480 + Math.random() * 300; // 約8〜13秒に1回
   }
 
   function hitbox(o) {
@@ -167,30 +195,39 @@
     if (o.type === 'lantern') return { x: o.x + 8, y: GROUND - o.h + 6, w: o.w - 16, h: o.h - 6 };
     return { x: o.x + 5, y: GROUND - o.h + 8, w: o.w - 10, h: o.h - 8 };
   }
-  function playerBox() {
-    // 頭+胴をざっくり。少し小さめにして理不尽な当たりを防ぐ
-    return { x: P.x - PW / 2 + 8, y: P.y - 100 + 8, w: PW - 16, h: 92 };
-  }
+  // 頭+胴をざっくり。少し小さめにして理不尽な当たりを防ぐ
+  const playerBox = () => ({ x: P.x - 26, y: P.y - 104, w: 52, h: 98 });
   const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  const near = (pb, x, y, r) => x > pb.x - r && x < pb.x + pb.w + r && y > pb.y - r && y < pb.y + pb.h + r;
 
   // ===== 更新 =====
   function update() {
     S.t++;
-    // 背景はタイトル中もゆっくり流す
-    const bgSpeed = S.mode === 'play' ? S.speed : (S.mode === 'title' ? 2 : 0);
-    S.clouds.forEach(c => { c.x -= bgSpeed * 0.15 * c.s; if (c.x < -100) { c.x = W + 60; c.y = 60 + Math.random() * 180; } });
-    S.hills.forEach(h => { h.x -= bgSpeed * 0.3; if (h.x + h.w < 0) { h.x = W + Math.random() * 60; h.h = 70 + Math.random() * 60; } });
+    const spd = S.mode === 'play' ? S.speed : (S.mode === 'title' ? 2.5 : 0);
+    S.scroll += spd;
+    S.clouds.forEach(c => { c.x -= spd * 0.08 * c.s; if (c.x < -100) { c.x = W + 60; c.y = 50 + Math.random() * 170; } });
     S.particles.forEach(p => { p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.life--; });
     S.particles = S.particles.filter(p => p.life > 0);
     if (S.shake > 0) S.shake--;
+    if (S.banner && --S.banner.t <= 0) S.banner = null;
+
+    // 景色: 春日川の看板と高松大学
+    S.signX -= spd * 0.3;  // 看板と校舎は同じ向こう岸なので同じ速さで流す
+    if (S.signX < -140) S.signX = W + 900 + Math.random() * 600;
+    if (S.landmark) { S.landmark.x -= spd * 0.3; if (S.landmark.x < -260) S.landmark = null; }
+    else if (S.mode !== 'over' && --S.landmarkT <= 0) {
+      S.landmark = { type: 'univ', x: W + 20 };
+      // 看板と重ならないように離す
+      if (S.signX > -140 && S.signX < W + 260) S.signX = Math.max(S.signX, W + 300);
+      S.landmarkT = 1300 + Math.random() * 700;
+    }
 
     if (S.mode === 'title') { P.run += 0.25; return; }
     if (S.mode === 'over') { S.overT++; return; }
 
-    // スピードと距離
     S.speed = Math.min(12, 5.2 + S.dist / 1400);
     S.dist += S.speed;
-    S.score = Math.floor(S.dist / 10) + S.stones * 50;
+    S.score = Math.floor(S.dist / 10) + S.stones * 50 + S.bonus;
 
     // プレイヤー
     P.vy += 0.8;
@@ -201,14 +238,13 @@
     }
     if (P.squash > 0) P.squash--;
     P.run += S.speed * 0.05;
-    if (P.faceT > 0 && --P.faceT === 0) P.face = 'happy';
+    if (P.faceT > 0 && --P.faceT === 0) P.face = 'normal';
     if (P.onGround && S.t % 8 === 0) dust(P.x - 15, GROUND);
 
-    // 生成
     if (--S.spawnT <= 0) spawnObstacle();
     if (--S.itemT <= 0) spawnItem();
+    if (--S.specialT <= 0) spawnSpecial();
 
-    // 障害物
     const pb = playerBox();
     for (const o of S.obstacles) {
       o.x -= S.speed * (o.type === 'crow' ? 1.25 : 1);
@@ -217,20 +253,34 @@
     }
     S.obstacles = S.obstacles.filter(o => o.x > -100);
 
-    // アイテム(庵治石のかけら)
+    // 庵治石のかけら
     for (const it of S.items) {
       it.x -= S.speed; it.t++;
-      const cx = it.x, cy = it.y + Math.sin(it.t * 0.1) * 5;
-      if (!it.got && cx > pb.x - it.r && cx < pb.x + pb.w + it.r && cy > pb.y - it.r && cy < pb.y + pb.h + it.r) {
-        it.got = true; S.stones++; setFace('tehe', 30); sparkle(cx, cy);
+      const cy = it.y + Math.sin(it.t * 0.1) * 5;
+      if (!it.got && near(pb, it.x, cy, it.r)) {
+        it.got = true; S.stones++; setFace('tehe', 30); sparkle(it.x, cy);
         beep(880, 0.08, 'triangle', 0.08); setTimeout(() => beep(1320, 0.12, 'triangle', 0.08), 70);
       }
     }
     S.items = S.items.filter(it => it.x > -40 && !it.got);
+
+    // 香川の特産品
+    for (const sp of S.specials) {
+      sp.x -= S.speed; sp.t++;
+      const cy = sp.y + Math.sin(sp.t * 0.08) * 6;
+      if (!sp.got && near(pb, sp.x, cy, 20)) {
+        sp.got = true; S.bonus += SPECIAL_BONUS;
+        if (!S.got.includes(sp.id)) S.got.push(sp.id);
+        setFace('happy', 60); sparkle(sp.x, cy, 18);
+        S.banner = { name: sp.name, text: sp.text, id: sp.id, t: 150 };
+        [784, 988, 1175, 1568].forEach((f, i) => setTimeout(() => beep(f, 0.12, 'triangle', 0.08), i * 70));
+      }
+    }
+    S.specials = S.specials.filter(sp => sp.x > -50 && !sp.got);
   }
 
   function gameOver() {
-    S.mode = 'over'; S.overT = 0; S.shake = 14;
+    S.mode = 'over'; S.overT = 0; S.shake = 14; S.banner = null;
     setFace('sad', 0);
     S.trivia = TRIVIA[Math.floor(Math.random() * TRIVIA.length)];
     if (S.score > S.best) { S.best = S.score; S.newBest = true; localStorage.setItem('waraishi_best', S.best); }
@@ -243,12 +293,12 @@
     ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
-  function line(w = 2.5) { ctx.lineWidth = w; ctx.strokeStyle = COL.dark; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; }
+  function line(w = 2.5, c = COL.dark) { ctx.lineWidth = w; ctx.strokeStyle = c; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; }
+  const FONT = '"Hiragino Maru Gothic ProN","BIZ UDPGothic","Yu Gothic",sans-serif';
   function text(str, x, y, size, color = COL.dark, align = 'center', weight = 'bold') {
-    ctx.font = `${weight} ${size}px "Hiragino Maru Gothic ProN","BIZ UDPGothic","Yu Gothic",sans-serif`;
+    ctx.font = `${weight} ${size}px ${FONT}`;
     ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillStyle = color; ctx.fillText(str, x, y);
   }
-  // 石っぽいざらざら(固定シードの点々)
   function speckle(x, y, w, h, n, seed) {
     ctx.fillStyle = 'rgba(46,46,46,0.12)';
     let s = seed;
@@ -258,160 +308,81 @@
       ctx.fillRect(x + rx * w, y + ry * h, 1.6, 1.6);
     }
   }
+  const wrapX = (x, span) => ((x % span) + span) % span;
 
   // ===== わらいしくん =====
-  function drawWaraishi(px, py, face, run, squash, bob = true) {
+  // 資料どおり: 大きな四角い頭 / ゴツゴツした石の胴 / 細い腕とミトンの手 / 細い足と四角い靴
+  function drawWaraishi(px, py, face, run, squash, inAir) {
     ctx.save();
     ctx.translate(px, py);
     const sq = squash > 0 ? squash / 8 : 0;
-    ctx.scale(1 + sq * 0.12, 1 - sq * 0.12);
-    const air = !P.onGround && S.mode === 'play';
     const step = Math.sin(run);
-    const bounce = bob && !air ? Math.abs(Math.cos(run)) * 3 : 0;
+    const bounce = !inAir ? Math.abs(Math.cos(run)) * 3 : 0;
 
     // 影
-    if (S.mode !== 'over' || true) {
-      ctx.save(); ctx.scale(1 / (1 + sq * 0.12), 1);
-      const hgt = Math.max(0, GROUND - py);
-      ctx.fillStyle = `rgba(46,46,46,${0.15 * Math.max(0.3, 1 - hgt / 250)})`;
-      ctx.beginPath(); ctx.ellipse(0, GROUND - py + 2, 30 - Math.min(14, hgt / 15), 6, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
-    }
+    const hgt = Math.max(0, GROUND - py);
+    ctx.fillStyle = `rgba(46,46,46,${0.16 * Math.max(0.3, 1 - hgt / 250)})`;
+    ctx.beginPath(); ctx.ellipse(0, GROUND - py + 2, 32 - Math.min(14, hgt / 15), 6, 0, 0, Math.PI * 2); ctx.fill();
 
-    // 足(棒+ブロックの足)
-    line(2.5);
-    const legs = air ? [[-9, -6, -12, -4], [9, 6, 14, -8]] : [[-9, step * 8, 0, 0], [9, -step * 8, 0, 0]];
-    for (const [lx, sw, , lift] of legs) {
-      const fx = lx + sw, fy = -6 + (air ? lift : Math.min(0, -Math.abs(sw) * 0.4));
-      ctx.beginPath(); ctx.moveTo(lx * 0.7, -26 - bounce); ctx.lineTo(fx, fy); ctx.stroke();
-      ctx.fillStyle = COL.light; rr(fx - 7, fy - 2, 14, 9, 3); ctx.fill(); ctx.stroke();
-    }
-
-    // 胴体(ゴツゴツした石)
+    ctx.scale(1 + sq * 0.1, 1 - sq * 0.1);
     const by = -bounce;
-    ctx.fillStyle = COL.mid;
-    ctx.beginPath();
-    ctx.moveTo(-14, -52 + by); ctx.lineTo(13, -53 + by); ctx.lineTo(18, -40 + by); ctx.lineTo(23, -27 + by);
-    ctx.lineTo(12, -22 + by); ctx.lineTo(4, -25 + by); ctx.lineTo(-6, -21 + by); ctx.lineTo(-22, -26 + by);
-    ctx.lineTo(-18, -40 + by); ctx.closePath(); ctx.fill(); line(2.5); ctx.stroke();
-    speckle(-18, -50 + by, 36, 26, 18, 7);
 
-    // 腕(棒+ミトンの手)。走りに合わせてふる
-    const armSw = air ? -10 : step * 6;
+    // 足(細い棒 + 小さな四角い靴)
+    line(2.2);
+    const legs = inAir ? [[-8, -7, -6], [8, 9, -12]] : [[-8, step * 7, 0], [8, -step * 7, 0]];
+    for (const [lx, sw, lift] of legs) {
+      const fx = lx + sw, fy = -5 + (inAir ? lift : Math.min(0, -Math.abs(sw) * 0.5));
+      ctx.beginPath(); ctx.moveTo(lx * 0.8, -22 + by); ctx.lineTo(fx, fy); ctx.stroke();
+      ctx.fillStyle = COL.light; rr(fx - 6, fy - 2, 12, 8, 2.5); ctx.fill(); ctx.stroke();
+    }
+
+    // 腕(細い棒 + ミトン)
+    const armSw = inAir ? 0 : step * 5;
     for (const side of [-1, 1]) {
-      const sx = side * 15, sy = -45 + by;
-      const hx = side * 30, hy = (air ? -60 : -38) + by + (side === 1 ? armSw : -armSw) * 0.6;
-      line(2.5); ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(hx, hy); ctx.stroke();
-      ctx.fillStyle = COL.light; ctx.beginPath(); ctx.arc(hx, hy, 6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.arc(hx + side * 4, hy - 5, 2.8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      const sx = side * 17, sy = -36 + by;
+      const hx = side * 33, hy = (inAir ? -52 : -30) + by + side * armSw;
+      line(2.2); ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(hx, hy); ctx.stroke();
+      ctx.fillStyle = COL.light;
+      ctx.beginPath(); ctx.arc(hx, hy, 5.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hx + side * 3, hy - 5, 2.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
 
-    // 頭(庵治石のブロック)。少し傾ける
+    // 胴体(資料の絵)
+    if (ready(IMG.torso)) ctx.drawImage(IMG.torso, -27, -46 + by, 54, 26);
+    else { ctx.fillStyle = COL.mid; rr(-22, -46 + by, 44, 24, 6); ctx.fill(); }
+
+    // 頭(資料の絵。表情ごとに差し替え)
+    const im = IMG[FACE_IMG[face] || 'head_main'];
     ctx.save();
-    ctx.translate(0, -52 + by);
-    ctx.rotate(air ? -0.08 : step * 0.025);
-    const hw = PW, hh = PH, d = 7; // d = 厚み
-    const x0 = -hw / 2, y0 = -hh;
-    // 上面と側面
-    ctx.fillStyle = COL.side;
-    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + d, y0 - d); ctx.lineTo(x0 + hw + d, y0 - d); ctx.lineTo(x0 + hw + d, y0 + hh - d);
-    ctx.lineTo(x0 + hw, y0 + hh); ctx.lineTo(x0 + hw, y0); ctx.closePath(); ctx.fill(); line(2.5); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x0 + hw, y0); ctx.lineTo(x0 + hw + d, y0 - d); ctx.stroke();
-    // 正面
-    ctx.fillStyle = COL.light; rr(x0, y0, hw, hh, 3); ctx.fill(); ctx.stroke();
-    speckle(x0 + 3, y0 + 3, hw - 6, hh - 6, 40, 3);
-    drawFace(x0, y0, hw, hh, face);
+    ctx.translate(0, -36 + by);
+    ctx.rotate(inAir ? -0.06 : step * 0.02);
+    const hw = 76;
+    if (ready(im)) {
+      const hh = hw * im.naturalHeight / im.naturalWidth;
+      ctx.drawImage(im, -hw / 2, -hh, hw, hh);
+    } else {
+      ctx.fillStyle = COL.light; rr(-hw / 2, -74, hw, 74, 4); ctx.fill(); line(2.5); ctx.stroke();
+    }
     ctx.restore();
-
     ctx.restore();
   }
 
-  function drawFace(x0, y0, w, h, face) {
-    const cx = x0 + w / 2;
-    const u = w / 58; // 顔パーツの基準スケール
-    line(1.8);
-    // 特徴的な「山形の線」(てっぺんから左右へ広がる)
-    ctx.beginPath();
-    ctx.moveTo(x0 + 5, y0 + 30 * u);
-    ctx.quadraticCurveTo(cx - 4, y0 + 24 * u, cx, y0 + 5 * u);
-    ctx.quadraticCurveTo(cx + 4, y0 + 24 * u, x0 + w - 5, y0 + 30 * u);
-    ctx.stroke();
-    // 上の小さな点
-    ctx.fillStyle = COL.dark;
-    ctx.beginPath(); ctx.arc(cx - 6 * u, y0 + 22 * u, 1.3, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(cx + 8 * u, y0 + 25 * u, 1.3, 0, Math.PI * 2); ctx.fill();
-
-    // 目
-    const ey = y0 + 32 * u;
-    if (face === 'sad') {
-      ctx.beginPath(); ctx.moveTo(cx - 19 * u, ey - 1); ctx.quadraticCurveTo(cx - 13 * u, ey + 3, cx - 7 * u, ey - 1); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(cx + 6 * u, ey - 2); ctx.quadraticCurveTo(cx + 12 * u, ey + 3, cx + 18 * u, ey); ctx.stroke();
-    } else {
-      // 左目(アーモンド形+黒目)
-      ctx.beginPath(); ctx.moveTo(cx - 20 * u, ey); ctx.quadraticCurveTo(cx - 13 * u, ey - 5, cx - 6 * u, ey + 1);
-      ctx.quadraticCurveTo(cx - 13 * u, ey + 4, cx - 20 * u, ey); ctx.stroke();
-      ctx.beginPath(); ctx.arc(cx - 14 * u, ey, face === 'surprise' ? 2.4 : 1.9, 0, Math.PI * 2); ctx.fill();
-      // 右目(三日月+黒目)
-      if (face === 'tehe') {
-        ctx.beginPath(); ctx.moveTo(cx + 6 * u, ey); ctx.quadraticCurveTo(cx + 12 * u, ey - 5, cx + 18 * u, ey); ctx.stroke();
-      } else {
-        ctx.beginPath(); ctx.arc(cx + 12 * u, ey - 1, 6 * u, Math.PI * 0.05, Math.PI * 0.95); ctx.stroke();
-        ctx.beginPath(); ctx.arc(cx + 13 * u, ey - 1, face === 'surprise' ? 2.4 : 1.9, 0, Math.PI * 2); ctx.fill();
-      }
-    }
-    // 鼻(大きなかぎ鼻)
-    const ny = y0 + 42 * u;
-    ctx.beginPath();
-    ctx.moveTo(cx + 6 * u, ny - 7 * u);
-    ctx.quadraticCurveTo(cx - 4 * u, ny - 2 * u, cx - 10 * u, ny + 1 * u);
-    ctx.quadraticCurveTo(cx - 13 * u, ny + 6 * u, cx - 7 * u, ny + 6 * u);
-    ctx.quadraticCurveTo(cx - 3 * u, ny + 8 * u, cx + 1 * u, ny + 5 * u);
-    ctx.quadraticCurveTo(cx + 6 * u, ny + 5 * u, cx + 7 * u, ny + 1 * u);
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(cx - 6 * u, ny + 3 * u, 1.2, 0, Math.PI * 2); ctx.fill();
-
-    // 口
-    const my = y0 + 52 * u;
-    ctx.beginPath();
-    if (face === 'surprise') {
-      ctx.ellipse(cx + 1, my, 3, 4, 0, 0, Math.PI * 2); ctx.stroke();
-    } else if (face === 'sad') {
-      ctx.moveTo(cx - 5, my + 2); ctx.quadraticCurveTo(cx, my - 3, cx + 5, my + 2); ctx.stroke();
-    } else if (face === 'tehe') {
-      ctx.moveTo(cx - 6, my - 1); ctx.quadraticCurveTo(cx, my + 4, cx + 6, my - 1); ctx.stroke();
-      ctx.fillStyle = COL.pink; ctx.beginPath(); ctx.ellipse(cx + 2, my + 3, 3, 2.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-    } else {
-      // うれしい口(上がギザっとした開いた口)
-      ctx.moveTo(cx - 6, my - 2); ctx.lineTo(cx - 2, my - 4); ctx.lineTo(cx + 1, my - 1); ctx.lineTo(cx + 4, my - 4); ctx.lineTo(cx + 6, my - 2);
-      ctx.quadraticCurveTo(cx, my + 7, cx - 6, my - 2); ctx.closePath();
-      ctx.fillStyle = COL.paper; ctx.fill(); ctx.stroke();
-    }
-    // ほっぺ
-    if (face === 'happy' || face === 'tehe') {
-      ctx.fillStyle = 'rgba(235,202,202,0.8)';
-      ctx.beginPath(); ctx.ellipse(cx - 20 * u, my - 4, 4, 2.5, 0, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(cx + 20 * u, my - 4, 4, 2.5, 0, 0, Math.PI * 2); ctx.fill();
-    }
-  }
-
-  // ===== 障害物の描画 =====
+  // ===== 障害物 =====
   function drawObstacle(o) {
     line(2.5);
     if (o.type === 'lantern') {
-      // 石灯籠
       const x = o.x, b = GROUND, w = o.w;
       ctx.fillStyle = COL.mid;
-      rr(x + 4, b - 12, w - 8, 12, 2); ctx.fill(); ctx.stroke();               // 台
-      rr(x + 13, b - 42, w - 26, 30, 2); ctx.fill(); ctx.stroke();             // 竿
+      rr(x + 4, b - 12, w - 8, 12, 2); ctx.fill(); ctx.stroke();
+      rr(x + 13, b - 42, w - 26, 30, 2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = COL.light;
-      rr(x + 6, b - 60, w - 12, 18, 2); ctx.fill(); ctx.stroke();              // 火袋
+      rr(x + 6, b - 60, w - 12, 18, 2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#f7e3a1'; ctx.fillRect(x + 15, b - 56, w - 30, 10); ctx.strokeRect(x + 15, b - 56, w - 30, 10);
-      ctx.fillStyle = COL.mid;                                                  // 笠
+      ctx.fillStyle = COL.mid;
       ctx.beginPath(); ctx.moveTo(x - 2, b - 60); ctx.lineTo(x + w / 2, b - 74); ctx.lineTo(x + w + 2, b - 60); ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.beginPath(); ctx.arc(x + w / 2, b - 76, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); // 宝珠
+      ctx.beginPath(); ctx.arc(x + w / 2, b - 76, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       speckle(x + 4, b - 60, w - 8, 60, 25, 11);
     } else if (o.type === 'rocks') {
-      // 石ころの山
       const x = o.x, b = GROUND, w = o.w, h = o.h;
       ctx.fillStyle = COL.mid;
       ctx.beginPath();
@@ -421,7 +392,6 @@
       ctx.beginPath(); ctx.moveTo(x + w * 0.45, b - h); ctx.lineTo(x + w * 0.5, b - h * 0.4); ctx.lineTo(x + w * 0.3, b); ctx.stroke();
       speckle(x, b - h, w, h, 20, 5);
     } else if (o.type === 'crow') {
-      // カラス
       const x = o.x, y = o.fy, f = Math.sin(o.flap) * 10;
       ctx.fillStyle = COL.dark;
       ctx.beginPath(); ctx.ellipse(x + 22, y, 16, 9, 0, 0, Math.PI * 2); ctx.fill();
@@ -434,13 +404,14 @@
     }
   }
 
+  // ===== 庵治石のかけら =====
+  function stoneShape() {
+    ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(11, -4); ctx.lineTo(8, 11); ctx.lineTo(-8, 11); ctx.lineTo(-11, -4); ctx.closePath();
+  }
   function drawItem(it) {
-    // 庵治石のかけら(キラキラ光る石)
     const y = it.y + Math.sin(it.t * 0.1) * 5, x = it.x;
     ctx.save(); ctx.translate(x, y); ctx.rotate(Math.sin(it.t * 0.05) * 0.2);
-    ctx.fillStyle = COL.paper; line(2);
-    ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(11, -4); ctx.lineTo(8, 11); ctx.lineTo(-8, 11); ctx.lineTo(-11, -4); ctx.closePath();
-    ctx.fill(); ctx.stroke();
+    ctx.fillStyle = COL.paper; line(2); stoneShape(); ctx.fill(); ctx.stroke();
     ctx.strokeStyle = COL.mid; ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(0, 11); ctx.moveTo(-11, -4); ctx.lineTo(11, -4); ctx.stroke();
     ctx.restore();
@@ -450,59 +421,249 @@
   }
   function star(x, y, r) {
     ctx.beginPath();
-    for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, rr2 = i % 2 ? r * 0.35 : r; ctx.lineTo(x + Math.cos(a) * rr2, y + Math.sin(a) * rr2); }
+    for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4, r2 = i % 2 ? r * 0.35 : r; ctx.lineTo(x + Math.cos(a) * r2, y + Math.sin(a) * r2); }
     ctx.closePath(); ctx.fill();
   }
 
-  // ===== 背景 =====
+  // ===== 香川の特産品の絵(中心0,0・だいたい40px) =====
+  function drawSpecialIcon(id) {
+    line(2.2);
+    if (id === 'udon') {
+      // どんぶり + 麺 + ねぎ + かまぼこ
+      ctx.fillStyle = '#fbf6e9';
+      ctx.beginPath(); ctx.ellipse(0, -4, 20, 6, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = '#d8c79a'; ctx.lineWidth = 1.6;
+      for (let i = -12; i <= 12; i += 6) { ctx.beginPath(); ctx.moveTo(i - 4, -6); ctx.quadraticCurveTo(i, -2, i + 4, -6); ctx.stroke(); }
+      ctx.fillStyle = '#8fbf5a'; [[-8, -6], [6, -3], [10, -7]].forEach(([a, b]) => { ctx.beginPath(); ctx.arc(a, b, 1.8, 0, 7); ctx.fill(); });
+      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-2, -5, 3.5, 0, 7); ctx.fill();
+      ctx.strokeStyle = '#e88a9a'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(-2, -5, 2, 0, 5); ctx.stroke();
+      line(2.2); ctx.fillStyle = '#b5442f';
+      ctx.beginPath(); ctx.moveTo(-20, -4); ctx.quadraticCurveTo(-18, 14, 0, 15); ctx.quadraticCurveTo(18, 14, 20, -4);
+      ctx.ellipse(0, -4, 20, 6, 0, 0, Math.PI); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#2e2e2e'; ctx.fillRect(-7, 14, 14, 3);
+      // はし
+      ctx.strokeStyle = '#c8a46a'; ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.moveTo(4, -6); ctx.lineTo(22, -20); ctx.moveTo(8, -5); ctx.lineTo(25, -16); ctx.stroke();
+    } else if (id === 'glove') {
+      // 手袋(ミトン型ではなく五本指)
+      ctx.fillStyle = '#d85d4f';
+      ctx.beginPath();
+      ctx.moveTo(-10, 16); ctx.lineTo(-10, -2);
+      ctx.lineTo(-17, -8); ctx.quadraticCurveTo(-20, -12, -16, -14); ctx.lineTo(-8, -8);
+      ctx.lineTo(-8, -18); ctx.quadraticCurveTo(-5, -22, -2, -18);
+      ctx.lineTo(-2, -21); ctx.quadraticCurveTo(1, -25, 4, -21);
+      ctx.lineTo(4, -19); ctx.quadraticCurveTo(7, -23, 10, -18);
+      ctx.lineTo(10, -14); ctx.quadraticCurveTo(13, -16, 14, -12);
+      ctx.lineTo(13, 4); ctx.lineTo(12, 16); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#f4f1ec'; rr(-12, 12, 26, 8, 2); ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = 'rgba(46,46,46,0.5)'; ctx.lineWidth = 1.2;
+      [-2, 4, 10].forEach(a => { ctx.beginPath(); ctx.moveTo(a, -14); ctx.lineTo(a, -4); ctx.stroke(); });
+    } else if (id === 'olive') {
+      // オリーブの枝と実
+      ctx.strokeStyle = '#6d5a3a'; ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.moveTo(-18, 14); ctx.quadraticCurveTo(0, 2, 18, -14); ctx.stroke();
+      line(1.8); ctx.fillStyle = '#8aa66a';
+      [[-8, 4, -0.8], [4, -4, -0.9], [12, -12, -1.2], [-2, 10, 0.6], [10, 2, 0.5]].forEach(([a, b, r]) => {
+        ctx.save(); ctx.translate(a, b); ctx.rotate(r); ctx.beginPath(); ctx.ellipse(0, -7, 3, 8, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); ctx.restore();
+      });
+      ctx.fillStyle = '#4e6b2f';
+      [[-6, 14], [6, 9]].forEach(([a, b]) => { ctx.beginPath(); ctx.ellipse(a, b, 5, 6.5, 0.3, 0, 7); ctx.fill(); ctx.stroke(); });
+      ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.beginPath(); ctx.arc(-7, 12, 1.5, 0, 7); ctx.arc(5, 7, 1.5, 0, 7); ctx.fill();
+    } else if (id === 'chicken') {
+      // 骨付鳥
+      ctx.fillStyle = '#f4f1ec';
+      ctx.beginPath(); ctx.moveTo(8, 2); ctx.lineTo(18, 12); ctx.stroke();
+      ctx.beginPath(); ctx.arc(19, 11, 3.5, 0, 7); ctx.arc(16, 15, 3.5, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#c9772f';
+      ctx.beginPath(); ctx.ellipse(-3, -5, 17, 13, -0.6, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = 'rgba(120,50,20,0.55)';
+      [[-9, -8], [-1, -10], [3, -2], [-6, 0]].forEach(([a, b]) => { ctx.beginPath(); ctx.arc(a, b, 1.6, 0, 7); ctx.fill(); });
+      ctx.fillStyle = 'rgba(255,240,200,0.6)'; ctx.beginPath(); ctx.ellipse(-8, -11, 5, 2.5, -0.6, 0, 7); ctx.fill();
+    } else if (id === 'uchiwa') {
+      // うちわ
+      ctx.strokeStyle = '#c8a46a'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(0, 22); ctx.stroke();
+      line(2.2); ctx.fillStyle = '#fbf6e9';
+      ctx.beginPath(); ctx.ellipse(0, -8, 17, 15, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#e06b5c'; ctx.beginPath(); ctx.arc(0, -8, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(46,46,46,0.25)'; ctx.lineWidth = 1;
+      for (let a = -2.6; a <= -0.5; a += 0.35) { ctx.beginPath(); ctx.moveTo(0, 2); ctx.lineTo(Math.cos(a) * 17, -8 + Math.sin(a) * 15 + 3); ctx.stroke(); }
+      text('丸', 0, -8, 9, '#fff');
+    }
+  }
+  function drawSpecial(sp) {
+    const y = sp.y + Math.sin(sp.t * 0.08) * 6, x = sp.x;
+    // 後光(とると良いことがあるのがわかるように)
+    const pulse = 1 + Math.sin(sp.t * 0.15) * 0.08;
+    ctx.fillStyle = 'rgba(255,236,150,0.55)';
+    ctx.beginPath(); ctx.arc(x, y, 28 * pulse, 0, Math.PI * 2); ctx.fill();
+    ctx.save(); ctx.translate(x, y); drawSpecialIcon(sp.id); ctx.restore();
+    text(sp.name, x, y + 36, 12, COL.dark);
+  }
+
+  // ===== 背景: 春日川ぞいの道 =====
+  function drawMountains() {
+    // 遠景: 屋島(テーブル状の山)と五剣山(ギザギザの山)
+    const span = 760, off = wrapX(-S.scroll * 0.06, span);
+    for (let k = -1; k < 2; k++) {
+      const bx = off + k * span;
+      ctx.fillStyle = '#cdd3cf';
+      // 屋島
+      ctx.beginPath(); ctx.moveTo(bx - 20, 440); ctx.quadraticCurveTo(bx + 30, 360, bx + 70, 352);
+      ctx.lineTo(bx + 230, 348); ctx.quadraticCurveTo(bx + 270, 356, bx + 330, 440); ctx.closePath(); ctx.fill();
+      // 五剣山
+      ctx.fillStyle = '#c3c9c4';
+      ctx.beginPath(); ctx.moveTo(bx + 380, 440);
+      const peaks = [[420, 380], [440, 395], [458, 360], [476, 388], [494, 352], [512, 384], [530, 364], [548, 392], [566, 374]];
+      ctx.lineTo(bx + 400, 400);
+      peaks.forEach(([a, b]) => ctx.lineTo(bx + a, b));
+      ctx.lineTo(bx + 640, 440); ctx.closePath(); ctx.fill();
+    }
+  }
+  function drawFarBank() {
+    // 向こう岸: 桜並木と家並み
+    const span = 520, off = wrapX(-S.scroll * 0.3, span);
+    ctx.fillStyle = '#c4cba7'; ctx.fillRect(0, 432, W, RIVER_TOP - 432);
+    for (let k = -1; k < 2; k++) {
+      const bx = off + k * span;
+      // 家
+      [[20, 26, '#e8e2d6'], [120, 20, '#ddd5c6'], [300, 30, '#e8e2d6'], [420, 22, '#d9d0c0']].forEach(([hx, hh, c]) => {
+        ctx.fillStyle = c; ctx.fillRect(bx + hx, 432 - hh, 38, hh);
+        ctx.fillStyle = '#8f8a80'; ctx.beginPath(); ctx.moveTo(bx + hx - 4, 432 - hh); ctx.lineTo(bx + hx + 19, 432 - hh - 12); ctx.lineTo(bx + hx + 42, 432 - hh); ctx.fill();
+      });
+      // 桜の木
+      [70, 200, 250, 370, 480].forEach((tx, i) => {
+        ctx.fillStyle = '#7c6a58'; ctx.fillRect(bx + tx - 2, 418, 4, 16);
+        ctx.fillStyle = i % 2 ? '#f2cfd3' : COL.pink;
+        ctx.beginPath(); ctx.arc(bx + tx, 410, 14, 0, 7); ctx.arc(bx + tx - 11, 416, 10, 0, 7); ctx.arc(bx + tx + 11, 416, 10, 0, 7); ctx.fill();
+      });
+    }
+  }
+  function drawUniversity(x) {
+    // 高松大学(向こう岸に見える校舎)
+    const base = 432;
+    ctx.fillStyle = '#efe9dd'; line(2);
+    ctx.fillRect(x, base - 70, 200, 70); ctx.strokeRect(x, base - 70, 200, 70);
+    ctx.fillStyle = '#e4dccd'; ctx.fillRect(x + 70, base - 96, 60, 26); ctx.strokeRect(x + 70, base - 96, 60, 26);
+    // 時計
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x + 100, base - 83, 8, 0, 7); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + 100, base - 83); ctx.lineTo(x + 100, base - 88); ctx.moveTo(x + 100, base - 83); ctx.lineTo(x + 104, base - 83); ctx.stroke();
+    // 窓
+    ctx.fillStyle = '#a9c6d1';
+    for (let r = 0; r < 2; r++) for (let c = 0; c < 8; c++) {
+      if (c === 3 || c === 4) continue;
+      ctx.fillRect(x + 12 + c * 23, base - 60 + r * 22, 14, 12);
+    }
+    ctx.fillStyle = '#8c7b66'; ctx.fillRect(x + 88, base - 22, 24, 22);
+    // 看板
+    ctx.fillStyle = '#2e5a8a'; rr(x + 42, base - 128, 116, 26, 6); ctx.fill();
+    text('高松大学', x + 100, base - 115, 16, '#fff');
+  }
+  function drawRiver() {
+    // 春日川の水面
+    const g = ctx.createLinearGradient(0, RIVER_TOP, 0, RIVER_BOTTOM);
+    g.addColorStop(0, '#9fbfcb'); g.addColorStop(1, '#b9d2da');
+    ctx.fillStyle = g; ctx.fillRect(0, RIVER_TOP, W, RIVER_BOTTOM - RIVER_TOP);
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    // 波(川の流れ + 走るスクロール)
+    const off = wrapX(-S.scroll * 0.5 - S.t * 0.4, 90);
+    for (let row = 0; row < 3; row++) {
+      const y = RIVER_TOP + 12 + row * 16;
+      for (let x = off - 90 + row * 30; x < W + 90; x += 90) {
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + 8, y - 3, x + 16, y); ctx.quadraticCurveTo(x + 24, y + 3, x + 32, y); ctx.stroke();
+      }
+    }
+  }
+  function drawNearBank() {
+    // 手前の土手(草)と柵
+    ctx.fillStyle = '#b9c49a';
+    ctx.beginPath(); ctx.moveTo(0, RIVER_BOTTOM); ctx.lineTo(W, RIVER_BOTTOM); ctx.lineTo(W, GROUND); ctx.lineTo(0, GROUND); ctx.fill();
+    ctx.fillStyle = '#a7b386';
+    const off = wrapX(-S.scroll * 0.9, 34);
+    for (let x = off - 34; x < W + 34; x += 34) {
+      ctx.beginPath(); ctx.moveTo(x, RIVER_BOTTOM + 12); ctx.lineTo(x + 3, RIVER_BOTTOM + 2); ctx.lineTo(x + 6, RIVER_BOTTOM + 12); ctx.fill();
+    }
+    // 柵
+    const fo = wrapX(-S.scroll, 60);
+    line(2, '#6e655a');
+    ctx.beginPath(); ctx.moveTo(0, GROUND - 30); ctx.lineTo(W, GROUND - 30); ctx.moveTo(0, GROUND - 18); ctx.lineTo(W, GROUND - 18); ctx.stroke();
+    ctx.fillStyle = '#efe9dd';
+    for (let x = fo - 60; x < W + 60; x += 60) { rr(x - 3, GROUND - 36, 6, 36, 2); ctx.fill(); ctx.stroke(); }
+  }
+  function drawRiverSign(x) {
+    // 「春日川」の看板
+    const y = 414;
+    line(2);
+    ctx.fillStyle = '#7c6a58'; ctx.fillRect(x + 36, y + 10, 4, 22); ctx.fillRect(x + 76, y + 10, 4, 22);
+    ctx.fillStyle = '#2e5a8a'; rr(x, y - 22, 116, 36, 5); ctx.fill(); ctx.stroke();
+    text('春日川', x + 58, y - 9, 16, '#fff');
+    text('KASUGA RIVER', x + 58, y + 7, 8, '#dbe7f2');
+  }
+  function drawPath() {
+    // 走る道(川ぞいの遊歩道)
+    ctx.fillStyle = '#e4dccd'; ctx.fillRect(0, GROUND, W, H - GROUND);
+    line(2.5); ctx.beginPath(); ctx.moveTo(0, GROUND); ctx.lineTo(W, GROUND); ctx.stroke();
+    const off = wrapX(-S.scroll, 80);
+    ctx.strokeStyle = 'rgba(46,46,46,0.22)'; ctx.lineWidth = 1.5;
+    for (let row = 0; row < 3; row++) {
+      const y = GROUND + 18 + row * 40;
+      ctx.beginPath(); ctx.moveTo(0, y + 22); ctx.lineTo(W, y + 22); ctx.stroke();
+      for (let x = off - 80 + (row % 2) * 40; x < W + 80; x += 80) {
+        ctx.beginPath(); ctx.moveTo(x, y - 18); ctx.lineTo(x, y + 22); ctx.stroke();
+      }
+    }
+  }
   function drawBG() {
-    const g = ctx.createLinearGradient(0, 0, 0, GROUND);
-    g.addColorStop(0, '#f6f1e8'); g.addColorStop(1, '#ece5da');
+    const g = ctx.createLinearGradient(0, 0, 0, 440);
+    g.addColorStop(0, '#dcebf2'); g.addColorStop(1, '#f6f1e8');
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    // 雲
     ctx.fillStyle = '#ffffff';
     for (const c of S.clouds) {
       ctx.beginPath(); ctx.ellipse(c.x, c.y, 34 * c.s, 13 * c.s, 0, 0, Math.PI * 2);
       ctx.ellipse(c.x + 20 * c.s, c.y - 8 * c.s, 22 * c.s, 12 * c.s, 0, 0, Math.PI * 2); ctx.fill();
     }
-    // 遠くの山(五剣山っぽいギザギザ)
-    ctx.fillStyle = '#d4cbbd';
-    for (const h of S.hills) {
-      ctx.beginPath(); ctx.moveTo(h.x, GROUND);
-      const n = 5;
-      for (let i = 0; i <= n; i++) ctx.lineTo(h.x + (h.w * i) / n, GROUND - 40 - h.h * (i % 2 ? 1 : 0.75) * Math.sin((i / n) * Math.PI) - 10);
-      ctx.lineTo(h.x + h.w, GROUND); ctx.closePath(); ctx.fill();
-    }
-    // 地面(石畳)
-    ctx.fillStyle = COL.light; ctx.fillRect(0, GROUND, W, H - GROUND);
-    line(2.5); ctx.beginPath(); ctx.moveTo(0, GROUND); ctx.lineTo(W, GROUND); ctx.stroke();
-    const off = (S.dist % 80);
-    ctx.strokeStyle = 'rgba(46,46,46,0.25)'; ctx.lineWidth = 1.5;
-    for (let row = 0; row < 3; row++) {
-      const y = GROUND + 18 + row * 40;
-      ctx.beginPath(); ctx.moveTo(0, y + 22); ctx.lineTo(W, y + 22); ctx.stroke();
-      for (let x = -off + (row % 2) * 40; x < W + 80; x += 80) {
-        ctx.beginPath(); ctx.moveTo(x, y - 18); ctx.lineTo(x, y + 22); ctx.stroke();
-      }
-    }
+    drawMountains();
+    drawFarBank();
+    if (S.landmark) drawUniversity(S.landmark.x);
+    drawRiverSign(S.signX);
+    drawRiver();
+    drawNearBank();
+    drawPath();
   }
 
+  // ===== HUD・画面 =====
   function drawHUD() {
     text(`${S.score}`, 20, 34, 30, COL.dark, 'left');
-    text(`ベスト ${S.best}`, 20, 64, 15, '#6f675c', 'left', 'bold');
-    // かけら数
+    text(`ベスト ${S.best}`, 20, 64, 15, '#6f675c', 'left');
     ctx.save(); ctx.translate(30, 92); ctx.scale(0.7, 0.7);
-    ctx.fillStyle = COL.paper; line(2.5);
-    ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(11, -4); ctx.lineTo(8, 11); ctx.lineTo(-8, 11); ctx.lineTo(-11, -4); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = COL.paper; line(2.5); stoneShape(); ctx.fill(); ctx.stroke();
     ctx.restore();
     text(`× ${S.stones}`, 44, 92, 16, COL.dark, 'left');
+    // 集めた特産品
+    SPECIALS.forEach((sp, i) => {
+      const x = 32 + i * 30, y = 124, have = S.got.includes(sp.id);
+      ctx.save(); ctx.translate(x, y); ctx.scale(0.5, 0.5);
+      ctx.globalAlpha = have ? 1 : 0.18; drawSpecialIcon(sp.id); ctx.restore();
+    });
+    if (S.banner) drawBanner();
   }
-
+  function drawBanner() {
+    const b = S.banner;
+    const a = Math.min(1, b.t / 20, (150 - b.t) / 10);
+    ctx.save(); ctx.globalAlpha = a;
+    const y = 172 + (1 - Math.min(1, (150 - b.t) / 10)) * -20;
+    ctx.fillStyle = 'rgba(255,250,235,0.97)'; rr(30, y, W - 60, 70, 14); ctx.fill(); line(2.5); ctx.stroke();
+    ctx.save(); ctx.translate(68, y + 35); ctx.scale(0.9, 0.9); drawSpecialIcon(b.id); ctx.restore();
+    text(`香川の${b.name}！ +${SPECIAL_BONUS}`, 104, y + 22, 16, COL.dark, 'left');
+    ctx.font = `bold 12px ${FONT}`;
+    text(b.text, 104, y + 47, 11.5, '#5c554b', 'left');
+    ctx.restore();
+  }
   function panel(x, y, w, h) {
     ctx.fillStyle = 'rgba(244,241,236,0.96)'; rr(x, y, w, h, 18); ctx.fill(); line(3); ctx.stroke();
   }
   function wrapText(str, x, y, maxW, lh, size) {
-    ctx.font = `bold ${size}px "Hiragino Maru Gothic ProN","BIZ UDPGothic","Yu Gothic",sans-serif`;
+    ctx.font = `bold ${size}px ${FONT}`;
     let lineStr = '', yy = y;
     for (const ch of str) {
       if (ctx.measureText(lineStr + ch).width > maxW) { text(lineStr, x, yy, size); lineStr = ch; yy += lh; }
@@ -510,7 +671,6 @@
     }
     if (lineStr) text(lineStr, x, yy, size);
   }
-
   function tapPill(label) {
     const sc = 1 + Math.sin(S.t * 0.1) * 0.04;
     ctx.save(); ctx.translate(W / 2, 640); ctx.scale(sc, sc);
@@ -519,42 +679,43 @@
     ctx.restore();
   }
   function drawTitle() {
-    // タイトル
-    ctx.save(); ctx.translate(W / 2, 120); ctx.rotate(-0.04);
+    ctx.save(); ctx.translate(W / 2, 110); ctx.rotate(-0.04);
     ctx.fillStyle = COL.light; rr(-150, 10, 300, 22, 11); ctx.fill();
     text('わらいしくん', 0, 0, 46);
     ctx.restore();
-    text('ラン', W / 2, 172, 40, COL.dark);
-    text('～ 庵治石のまちを走れ！ ～', W / 2, 214, 17, '#6f675c');
-    // 遊び方
-    panel(40, 250, W - 80, 150);
-    text('あそびかた', W / 2, 276, 17);
-    text('画面タップでジャンプ！', W / 2, 308, 16, COL.dark, 'center', 'normal');
-    text('空中でもう1回タップで2段ジャンプ', W / 2, 334, 15, COL.dark, 'center', 'normal');
-    text('灯籠・石ころ・カラスをよけて', W / 2, 360, 15, COL.dark, 'center', 'normal');
-    text('庵治石のかけら ✦ を集めよう(+50)', W / 2, 384, 15, COL.dark, 'center', 'normal');
-    if (S.best > 0) text(`ベストスコア ${S.best}`, W / 2, 430, 16, '#6f675c');
+    text('ラン', W / 2, 160, 40);
+    text('～ 春日川ぞいを走れ！ ～', W / 2, 200, 17, '#6f675c');
+    panel(36, 226, W - 72, S.best > 0 ? 188 : 160);
+    text('あそびかた', W / 2, 250, 17);
+    text('画面タップでジャンプ！', W / 2, 280, 15, COL.dark, 'center', 'normal');
+    text('空中でもう1回タップで2段ジャンプ', W / 2, 304, 15, COL.dark, 'center', 'normal');
+    text('灯籠・石ころ・カラスをよけて', W / 2, 328, 15, COL.dark, 'center', 'normal');
+    text('庵治石のかけら(+50)と', W / 2, 352, 15, COL.dark, 'center', 'normal');
+    text('香川の特産品(+100)を集めよう！', W / 2, 374, 15, COL.dark, 'center', 'normal');
+    if (S.best > 0) text(`ベストスコア ${S.best}`, W / 2, 400, 15, '#6f675c');
     tapPill('タップしてスタート');
   }
-
   function drawOver() {
     ctx.fillStyle = 'rgba(46,46,46,0.25)'; ctx.fillRect(0, 0, W, H);
-    panel(30, 120, W - 60, 380);
-    text('へこむ～…', W / 2, 160, 30);
-    text('スコア', W / 2, 205, 16, '#6f675c');
-    text(`${S.score}`, W / 2, 245, 48);
+    panel(30, 96, W - 60, 400);
+    text('へこむ～…', W / 2, 134, 30);
+    text('スコア', W / 2, 176, 16, '#6f675c');
+    text(`${S.score}`, W / 2, 214, 46);
     if (S.newBest) {
-      ctx.fillStyle = COL.pink; rr(W / 2 - 70, 278, 140, 28, 14); ctx.fill();
-      text('ベスト更新！', W / 2, 292, 16);
-    } else text(`ベスト ${S.best}`, W / 2, 292, 16, '#6f675c');
-    text(`走ったきょり ${Math.floor(S.dist / 10)}m ／ かけら ${S.stones}こ`, W / 2, 325, 14, COL.dark, 'center', 'normal');
-    // まめちしき
-    ctx.fillStyle = COL.light; rr(50, 348, W - 100, 120, 12); ctx.fill();
-    text('庵治石まめちしき', W / 2, 368, 14, '#6f675c');
-    wrapText(S.trivia, W / 2, 398, W - 130, 24, 15);
-    if (S.overT > 40) {
-      tapPill('タップでもう一回！');
-    }
+      ctx.fillStyle = COL.pink; rr(W / 2 - 70, 246, 140, 28, 14); ctx.fill();
+      text('ベスト更新！', W / 2, 260, 16);
+    } else text(`ベスト ${S.best}`, W / 2, 260, 16, '#6f675c');
+    text(`きょり ${Math.floor(S.dist / 10)}m ／ かけら ${S.stones}こ`, W / 2, 290, 14, COL.dark, 'center', 'normal');
+    // 集めた特産品
+    text(`香川の特産品 ${S.got.length} / ${SPECIALS.length}`, W / 2, 316, 13, '#6f675c');
+    SPECIALS.forEach((sp, i) => {
+      ctx.save(); ctx.translate(W / 2 - 96 + i * 48, 348); ctx.scale(0.7, 0.7);
+      ctx.globalAlpha = S.got.includes(sp.id) ? 1 : 0.15; drawSpecialIcon(sp.id); ctx.restore();
+    });
+    ctx.fillStyle = COL.light; rr(50, 380, W - 100, 104, 12); ctx.fill();
+    text('庵治石まめちしき', W / 2, 398, 13, '#6f675c');
+    wrapText(S.trivia, W / 2, 426, W - 130, 22, 14);
+    if (S.overT > 40) tapPill('タップでもう一回！');
   }
 
   function draw() {
@@ -562,11 +723,13 @@
     if (S.shake > 0) ctx.translate((Math.random() - 0.5) * S.shake, (Math.random() - 0.5) * S.shake);
     drawBG();
     for (const it of S.items) drawItem(it);
+    for (const sp of S.specials) drawSpecial(sp);
     for (const o of S.obstacles) drawObstacle(o);
     if (S.mode === 'title') {
-      drawWaraishi(W / 2, GROUND, Math.floor(S.t / 120) % 4 === 3 ? 'tehe' : 'happy', P.run, 0);
+      const f = Math.floor(S.t / 120) % 4 === 3 ? 'tehe' : 'happy';
+      drawWaraishi(W / 2, GROUND, f, P.run, 0, false);
     } else {
-      drawWaraishi(P.x, P.y, P.face, P.run, P.squash);
+      drawWaraishi(P.x, P.y, P.face, P.run, P.squash, !P.onGround && S.mode === 'play');
     }
     for (const p of S.particles) {
       ctx.globalAlpha = Math.max(0, p.life / 30); ctx.fillStyle = p.c;
@@ -588,6 +751,9 @@
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
+
+  // 動作確認用(URLに ?debug を付けたときだけ)
+  if (location.search.includes('debug')) window.__G = { S, P, spawnSpecial };
 })();
 </script>
 </body>
