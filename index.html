@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#d9d3cb">
-<title>わらいしくんラン ～春日川を走れ！～</title>
+<title>わらいしくんラン ～高松から宇宙まで走れ！～</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html, body { height: 100%; background: #d9d3cb; overflow: hidden; touch-action: manipulation; }
@@ -68,6 +68,7 @@
     muted = !muted;
     localStorage.setItem('waraishi_mute', muted ? '1' : '0');
     muteBtn.textContent = muted ? '🔇' : '🔊';
+    if (muted) stopMusic(0.2); else if (S.mode === 'play') startMusic();
   });
   function beep(freq, dur, type = 'square', vol = 0.08, slide = 0) {
     if (muted) return;
@@ -81,6 +82,112 @@
       o.connect(g).connect(audio.destination);
       o.start(); o.stop(audio.currentTime + dur);
     } catch (_) {}
+  }
+
+
+  // ===== BGM =====
+  // 使いたい曲: 「情動カタルシス」(作曲: まんぼう二等兵 / フリーBGM OpenTracks ※旧DOVA-SYNDROME)
+  // OpenTracksの規約では、利用者が音源ファイルを取り出せる状態での組み込み・音源の再配布が禁止されている。
+  // そのため mp3 は公開リポジトリには入れない(.gitignore で assets/bgm/ を除外)。
+  // assets/bgm/bgm.mp3 が置いてあるときだけそれを流し、無いときはゲーム内で自動演奏するオリジナル曲を流す。
+  const BGM_FILE = 'assets/bgm/bgm.mp3';
+  const BGM_LOOP = [6.486, 129.729];   // 曲ページに記載のループ位置(始点・終点 秒)
+  const Music = { buf: null, tried: false, src: null, gain: null, timer: null, playing: false, next: 0, step: 0 };
+  const musicKind = () => (Music.buf ? 'file' : 'synth');
+  function ensureAudio() {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+    return audio;
+  }
+  async function loadBgm() {
+    if (Music.tried) return;
+    Music.tried = true;
+    try {
+      const r = await fetch(BGM_FILE, { cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.arrayBuffer();
+      const buf = await new Promise((ok, ng) => ensureAudio().decodeAudioData(data, ok, ng));
+      Music.buf = buf;
+      if (Music.playing) { stopMusic(0.2); setTimeout(startMusic, 260); }  // 合成音から差し替え
+    } catch (_) { /* ファイルが無い・読めないときはオリジナル曲のまま */ }
+  }
+  function startMusic() {
+    if (muted || Music.playing) return;
+    const ac = ensureAudio();
+    Music.playing = true;
+    Music.gain = ac.createGain();
+    Music.gain.gain.setValueAtTime(0.0001, ac.currentTime);
+    Music.gain.gain.linearRampToValueAtTime(Music.buf ? 0.45 : 0.22, ac.currentTime + 0.6);
+    Music.gain.connect(ac.destination);
+    if (Music.buf) {
+      const s = ac.createBufferSource();
+      s.buffer = Music.buf; s.loop = true;
+      s.loopStart = BGM_LOOP[0]; s.loopEnd = Math.min(BGM_LOOP[1], Music.buf.duration);
+      s.connect(Music.gain); s.start();
+      Music.src = s;
+    } else {
+      Music.next = ac.currentTime + 0.05; Music.step = 0;
+      Music.timer = setInterval(scheduleSynth, 25);
+    }
+  }
+  function stopMusic(fade = 0.5) {
+    if (!Music.playing) return;
+    Music.playing = false;
+    clearInterval(Music.timer); Music.timer = null;
+    const ac = audio, g = Music.gain, s = Music.src;
+    Music.src = null;
+    g.gain.cancelScheduledValues(ac.currentTime);
+    g.gain.setValueAtTime(g.gain.value, ac.currentTime);
+    g.gain.linearRampToValueAtTime(0.0001, ac.currentTime + fade);
+    setTimeout(() => { try { s && s.stop(); } catch (_) {} g.disconnect(); }, fade * 1000 + 80);
+  }
+
+  // --- オリジナル曲(チップチューン風・自作) 150BPM / 8分音符で64ステップのループ ---
+  const N = n => 440 * Math.pow(2, (n - 69) / 12);
+  const LEAD = [
+    72, 0, 76, 79, 76, 0, 74, 72,   69, 0, 72, 76, 74, 72, 69, 0,
+    65, 69, 72, 0, 77, 76, 74, 72,  74, 0, 71, 74, 79, 0, 0, 0,
+    72, 74, 76, 0, 79, 0, 81, 79,   76, 0, 72, 0, 74, 76, 72, 0,
+    77, 0, 76, 74, 72, 0, 69, 72,   71, 0, 74, 0, 79, 77, 76, 74,
+  ];
+  const ROOT = [48, 45, 41, 43, 48, 45, 41, 43];   // C - Am - F - G を2回
+  let noiseBuf = null;
+  function playNote(type, freq, t, dur, vol) {
+    const ac = audio, o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(Music.gain); o.start(t); o.stop(t + dur + 0.02);
+  }
+  function playKick(t) {
+    const ac = audio, o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.setValueAtTime(150, t); o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+    g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+    o.connect(g).connect(Music.gain); o.start(t); o.stop(t + 0.16);
+  }
+  function playHat(t, vol) {
+    const ac = audio;
+    if (!noiseBuf) {
+      noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.05, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = 7000;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+    s.connect(f).connect(g).connect(Music.gain); s.start(t);
+  }
+  function scheduleSynth() {
+    if (!Music.playing || !Music.gain) return;
+    const ac = audio, step8 = 60 / 150 / 2;
+    while (Music.next < ac.currentTime + 0.12) {
+      const i = Music.step % 64, t = Music.next;
+      const root = ROOT[Math.floor(i / 8)];
+      playNote('triangle', N(root + (i % 2 ? 12 : 0)), t, step8 * 0.9, 0.55);      // ベース
+      if (LEAD[i]) playNote('square', N(LEAD[i]), t, step8 * 0.85, 0.16);          // メロディ
+      if (i % 4 === 0) playKick(t);
+      playHat(t, i % 2 ? 0.25 : 0.12);
+      Music.next += step8; Music.step++;
+    }
   }
 
   // ===== 庵治石まめちしき(ゲームオーバー時に1つ表示) =====
@@ -120,8 +227,20 @@
     localStorage.setItem('waraishi_rank', JSON.stringify(SAVE.rank));
     localStorage.setItem('waraishi_items', JSON.stringify(SAVE.items));
   }
-  const MENU_MODES = ['home', 'start', 'ranking', 'items'];
+  const MENU_MODES = ['home', 'start', 'ranking', 'items', 'credits'];
   const inMenu = () => MENU_MODES.includes(S.mode);
+
+  // ===== ステージ(だいたい1000mごと) =====
+  const STAGES = [
+    { name: '高松大学', at: 0 },
+    { name: '高松駅', at: 1000 },
+    { name: '高松空港', at: 2000 },
+    { name: '東京スカイツリー', at: 3000 },
+    { name: '東京タワー', at: 4000 },
+    { name: '宇宙', at: 5000 },
+  ];
+  const meters = () => Math.floor(S.dist / 10);
+  function stageOf(m) { let i = 0; STAGES.forEach((st, k) => { if (m >= st.at) i = k; }); return i; }
 
   // ===== ゲーム状態 =====
   const S = {
@@ -132,7 +251,8 @@
     obstacles: [], items: [], specials: [], particles: [], clouds: [],
     spawnT: 0, itemT: 0, specialT: 0, trivia: '', overT: 0, newBest: false, shake: 0,
     banner: null,          // 特産品をとったときの表示
-    landmark: null,        // 高松大学など、たまに出てくる景色
+    landmark: { stage: 0, x: 170 },  // 各ステージの名所(スタートは高松大学)
+    prevLandmark: null, stage: 0, prevStage: 0, stageT: 999, stageBanner: null,
     landmarkT: 0, signX: 120, scroll: 0,
   };
   const P = { x: 90, y: GROUND, vy: 0, jumps: 0, onGround: true, face: 'normal', faceT: 0, run: 0, squash: 0 };
@@ -144,7 +264,8 @@
       mode: 'play', t: 0, speed: 5.2, dist: 0, score: 0, stones: 0, bonus: 0, got: [],
       obstacles: [], items: [], specials: [], particles: [], spawnT: 60, itemT: 90,
       specialT: 420 + Math.random() * 240, newBest: false, banner: null,
-      landmark: null, landmarkT: 900, signX: 260,
+      landmark: { stage: 0, x: 170 }, prevLandmark: null, landmarkT: 1500, signX: 620,
+      stage: 0, prevStage: 0, stageT: 999, stageBanner: null,
       nextGrave: GRAVE_EVERY, graveAlert: 0, graveCount: 0, runCount: {}, rankPos: 0,
     });
     Object.assign(P, { y: GROUND, vy: 0, jumps: 0, onGround: true, face: 'normal', faceT: 0 });
@@ -152,8 +273,14 @@
 
   // ===== 入力 =====
   // 画面を切り替えたら、前の画面のボタンは無効にする(次の描画で登録し直す)
-  function go(mode) { S.mode = mode; S.buttons = []; beep(660, 0.08, 'triangle', 0.07); }
-  function startGame() { reset(); S.buttons = []; beep(660, 0.12); }
+  function go(mode) {
+    if (S.mode === 'over') {   // ゲームオーバーからメニューへ: 景色をスタート地点に戻す
+      Object.assign(S, { stage: 0, prevStage: 0, stageT: 999, landmark: { stage: 0, x: 170 }, prevLandmark: null,
+        obstacles: [], items: [], specials: [], signX: 620 });
+    }
+    S.mode = mode; S.buttons = []; stopMusic(); beep(660, 0.08, 'triangle', 0.07);
+  }
+  function startGame() { reset(); S.buttons = []; beep(660, 0.12); startMusic(); }
   // 画面上のボタン(描画のたびに S.buttons に登録される)
   function hitButton(x, y) {
     for (let i = S.buttons.length - 1; i >= 0; i--) {
@@ -178,6 +305,7 @@
   }
   canvas.addEventListener('pointerdown', e => {
     e.preventDefault();
+    ensureAudio(); loadBgm();
     const r = canvas.getBoundingClientRect();
     press((e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height);
   });
@@ -273,19 +401,31 @@
     // 景色: 春日川の看板と高松大学
     S.signX -= spd * 0.3;  // 看板と校舎は同じ向こう岸なので同じ速さで流す
     if (S.signX < -140) S.signX = W + 900 + Math.random() * 600;
-    if (S.landmark) { S.landmark.x -= spd * 0.3; if (S.landmark.x < -260) S.landmark = null; }
+    if (S.prevLandmark) { S.prevLandmark.x -= spd * 0.3; if (S.prevLandmark.x < -320) S.prevLandmark = null; }
+    if (S.landmark) { S.landmark.x -= spd * 0.3; if (S.landmark.x < -320) S.landmark = null; }
     else if (S.mode !== 'over' && --S.landmarkT <= 0) {
-      S.landmark = { type: 'univ', x: W + 20 };
-      // 看板と重ならないように離す
-      if (S.signX > -140 && S.signX < W + 260) S.signX = Math.max(S.signX, W + 300);
+      S.landmark = { stage: S.stage, x: W + 20 };
+      // 春日川の看板と重ならないように離す
+      if (S.stage === 0 && S.signX > -140 && S.signX < W + 260) S.signX = Math.max(S.signX, W + 300);
       S.landmarkT = 1300 + Math.random() * 700;
     }
+    S.stageT++;
+    if (S.stageBanner && --S.stageBanner.t <= 0) S.stageBanner = null;
 
     if (inMenu()) { P.run += 0.25; return; }
     if (S.mode === 'over') { S.overT++; return; }
 
     S.speed = Math.min(12, 5.2 + S.dist / 1400);
     S.dist += S.speed;
+    const st = stageOf(meters());
+    if (st !== S.stage) {   // 次のステージに到着
+      S.prevStage = S.stage; S.stage = st; S.stageT = 0;
+      S.prevLandmark = S.landmark;
+      S.landmark = { stage: st, x: W + 20 }; S.landmarkT = 1300 + Math.random() * 700;
+      S.stageBanner = { t: 170, sub: `${STAGES[st].at}m 到達！`,
+        text: st === STAGES.length - 1 ? 'ついに宇宙へ！' : `${STAGES[st].name}に到着！` };
+      [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.14, 'triangle', 0.07), i * 90));
+    }
     S.score = Math.floor(S.dist / 10) + S.stones * 50 + S.bonus;
 
     // プレイヤー
@@ -344,13 +484,14 @@
   }
 
   function gameOver() {
-    S.mode = 'over'; S.overT = 0; S.shake = 14; S.banner = null;
+    S.mode = 'over'; S.overT = 0; S.shake = 14; S.banner = null; S.stageBanner = null;
+    stopMusic(0.6);
     setFace('sad', 0);
     S.trivia = TRIVIA[Math.floor(Math.random() * TRIVIA.length)];
     if (S.score > S.best) { S.best = S.score; S.newBest = true; localStorage.setItem('waraishi_best', S.best); }
     // ランキングとアイテムの記録を保存
     const d = new Date();
-    const entry = { score: S.score, m: Math.floor(S.dist / 10), stones: S.stones, sp: S.got.length,
+    const entry = { score: S.score, m: Math.floor(S.dist / 10), stones: S.stones, sp: S.got.length, stage: STAGES[S.stage].name,
       date: `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}` };
     SAVE.rank.push(entry);
     SAVE.rank.sort((a, b) => b.score - a.score);
@@ -730,27 +871,375 @@
       }
     }
   }
-  function drawBG() {
-    const g = ctx.createLinearGradient(0, 0, 0, 440);
-    g.addColorStop(0, '#dcebf2'); g.addColorStop(1, '#f6f1e8');
+  // ===== ステージ(だいたい1000mごとに景色が変わる) =====
+  // 高松大学(春日川) → 高松駅 → 高松空港 → 東京スカイツリー → 東京タワー → 宇宙
+  function drawSky(top, bottom, toY = 440) {
+    const g = ctx.createLinearGradient(0, 0, 0, toY);
+    g.addColorStop(0, top); g.addColorStop(1, bottom);
     ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#ffffff';
+  }
+  function drawClouds(color = '#ffffff') {
+    ctx.fillStyle = color;
     for (const c of S.clouds) {
       ctx.beginPath(); ctx.ellipse(c.x, c.y, 34 * c.s, 13 * c.s, 0, 0, Math.PI * 2);
       ctx.ellipse(c.x + 20 * c.s, c.y - 8 * c.s, 22 * c.s, 12 * c.s, 0, 0, Math.PI * 2); ctx.fill();
     }
+  }
+  // 地面(タイル模様)
+  function drawGround(fill, lineCol, edge = COL.dark, tile = 80) {
+    ctx.fillStyle = fill; ctx.fillRect(0, GROUND, W, H - GROUND);
+    line(2.5, edge); ctx.beginPath(); ctx.moveTo(0, GROUND); ctx.lineTo(W, GROUND); ctx.stroke();
+    const off = wrapX(-S.scroll, tile);
+    ctx.strokeStyle = lineCol; ctx.lineWidth = 1.5;
+    for (let row = 0; row < 3; row++) {
+      const y = GROUND + 18 + row * 40;
+      ctx.beginPath(); ctx.moveTo(0, y + 22); ctx.lineTo(W, y + 22); ctx.stroke();
+      for (let x = off - tile + (row % 2) * tile / 2; x < W + tile; x += tile) {
+        ctx.beginPath(); ctx.moveTo(x, y - 18); ctx.lineTo(x, y + 22); ctx.stroke();
+      }
+    }
+  }
+  // ビル街のシルエット(seedで形を固定)
+  function drawSkyline(baseY, span, par, color, maxH, seed, windows) {
+    const off = wrapX(-S.scroll * par, span);
+    for (let k = -1; k < 2; k++) {
+      let s = seed, x = off + k * span;
+      const end = x + span;
+      while (x < end) {
+        s = (s * 9301 + 49297) % 233280; const bw = 26 + (s / 233280) * 34;
+        s = (s * 9301 + 49297) % 233280; const bh = maxH * (0.35 + (s / 233280) * 0.65);
+        ctx.fillStyle = color; ctx.fillRect(x, baseY - bh, bw - 3, bh);
+        if (windows) {
+          ctx.fillStyle = windows;
+          for (let wy = baseY - bh + 6; wy < baseY - 6; wy += 10)
+            for (let wx = x + 4; wx < x + bw - 8; wx += 8)
+              if (((wx * 7 + wy * 3) | 0) % 5 < 3) ctx.fillRect(wx, wy, 3, 4);
+        }
+        x += bw;
+      }
+    }
+  }
+  function streetLamps(color = '#6e655a') {
+    const off = wrapX(-S.scroll, 160);
+    line(2.5, color);
+    for (let x = off - 160; x < W + 160; x += 160) {
+      ctx.beginPath(); ctx.moveTo(x, GROUND); ctx.lineTo(x, GROUND - 70); ctx.quadraticCurveTo(x, GROUND - 80, x + 12, GROUND - 80); ctx.stroke();
+      ctx.fillStyle = '#f7e3a1'; ctx.beginPath(); ctx.ellipse(x + 14, GROUND - 78, 7, 4, 0, 0, 7); ctx.fill(); ctx.stroke();
+    }
+  }
+  function nameBoard(label, sub, cx, y, bg = '#2e5a8a') {
+    ctx.font = `bold 15px ${FONT}`;
+    const w = Math.max(ctx.measureText(label).width + 28, 100);
+    ctx.fillStyle = bg; rr(cx - w / 2, y, w, sub ? 34 : 26, 6); ctx.fill(); line(2); ctx.stroke();
+    text(label, cx, y + (sub ? 12 : 13), 15, '#fff');
+    if (sub) text(sub, cx, y + 26, 8, '#dbe7f2');
+  }
+
+  // --- 0: 高松大学・春日川 ---
+  function stageKasuga(lm) {
+    drawSky('#dcebf2', '#f6f1e8');
+    drawClouds();
     drawMountains();
     drawFarBank();
-    if (S.landmark) drawUniversity(S.landmark.x);
+    if (lm) drawUniversity(lm.x);
     drawRiverSign(S.signX);
     drawRiver();
     drawNearBank();
     drawPath();
   }
 
+  // --- 1: 高松駅(港と瀬戸内海) ---
+  function drawStation(x) {
+    const base = 470;
+    // 高松シンボルタワー(後ろの高いビル)
+    const tx = x + 210;
+    ctx.fillStyle = '#c9dbe4'; line(2);
+    ctx.fillRect(tx, base - 250, 46, 250); ctx.strokeRect(tx, base - 250, 46, 250);
+    ctx.strokeStyle = 'rgba(46,46,46,0.25)'; ctx.lineWidth = 1;
+    for (let y = base - 240; y < base; y += 12) { ctx.beginPath(); ctx.moveTo(tx + 4, y); ctx.lineTo(tx + 42, y); ctx.stroke(); }
+    line(2); ctx.beginPath(); ctx.moveTo(tx + 23, base - 250); ctx.lineTo(tx + 23, base - 275); ctx.stroke();
+    // 駅舎(大きなアーチ窓)
+    ctx.fillStyle = '#f1ece2'; line(2);
+    ctx.fillRect(x, base - 80, 230, 80); ctx.strokeRect(x, base - 80, 230, 80);
+    ctx.fillStyle = '#a9c6d1';
+    ctx.beginPath(); ctx.moveTo(x + 30, base); ctx.lineTo(x + 30, base - 50);
+    ctx.quadraticCurveTo(x + 115, base - 120, x + 200, base - 50); ctx.lineTo(x + 200, base); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5;
+    for (let gx = x + 50; gx < x + 200; gx += 20) { ctx.beginPath(); ctx.moveTo(gx, base); ctx.lineTo(gx, base - 70); ctx.stroke(); }
+    nameBoard('高松駅', 'TAKAMATSU STATION', x + 115, base - 128);
+  }
+  function stageStation(lm) {
+    drawSky('#d6ebf5', '#f3f1ea');
+    drawClouds();
+    // 瀬戸内の島々と海
+    const off = wrapX(-S.scroll * 0.05, 500);
+    ctx.fillStyle = '#b8c9b4';
+    for (let k = -1; k < 2; k++) {
+      const bx = off + k * 500;
+      [[40, 90, 26], [200, 60, 18], [330, 120, 34]].forEach(([ix, iw, ih]) => {
+        ctx.beginPath(); ctx.moveTo(bx + ix, 410); ctx.quadraticCurveTo(bx + ix + iw / 2, 410 - ih * 2, bx + ix + iw, 410); ctx.fill();
+      });
+    }
+    const sg = ctx.createLinearGradient(0, 410, 0, 470);
+    sg.addColorStop(0, '#8fb7c9'); sg.addColorStop(1, '#b6d3de');
+    ctx.fillStyle = sg; ctx.fillRect(0, 410, W, 60);
+    // フェリー
+    const fx = W - wrapX(S.t * 0.4, W + 160);
+    ctx.fillStyle = '#fff'; line(2);
+    ctx.beginPath(); ctx.moveTo(fx, 440); ctx.lineTo(fx + 70, 440); ctx.lineTo(fx + 62, 452); ctx.lineTo(fx + 6, 452); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillRect(fx + 18, 430, 34, 10); ctx.strokeRect(fx + 18, 430, 34, 10);
+    ctx.fillStyle = '#2e5a8a'; ctx.fillRect(fx + 8, 444, 54, 3);
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2;
+    const wo = wrapX(-S.scroll * 0.3, 70);
+    for (let x = wo - 70; x < W + 70; x += 70) { ctx.beginPath(); ctx.moveTo(x, 462); ctx.quadraticCurveTo(x + 8, 459, x + 16, 462); ctx.stroke(); }
+    // 港の岸壁と街
+    ctx.fillStyle = '#d9d3c7'; ctx.fillRect(0, 470, W, 30);
+    drawSkyline(470, 520, 0.3, '#e6e0d4', 50, 11, 'rgba(143,183,201,0.8)');
+    if (lm) drawStation(lm.x);
+    // 駅前広場
+    ctx.fillStyle = '#c9c1b0'; ctx.fillRect(0, 500, W, GROUND - 500);
+    streetLamps();
+    drawGround('#e8e0d0', 'rgba(150,90,60,0.25)');
+  }
+
+  // --- 2: 高松空港 ---
+  function drawAirport(x) {
+    const base = 470;
+    // 管制塔
+    ctx.fillStyle = '#efeae0'; line(2);
+    ctx.fillRect(x + 220, base - 150, 22, 150); ctx.strokeRect(x + 220, base - 150, 22, 150);
+    ctx.fillStyle = '#8fb7c9'; ctx.beginPath(); ctx.moveTo(x + 208, base - 150); ctx.lineTo(x + 254, base - 150); ctx.lineTo(x + 248, base - 172); ctx.lineTo(x + 214, base - 172); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#efeae0'; ctx.fillRect(x + 210, base - 180, 42, 8); ctx.strokeRect(x + 210, base - 180, 42, 8);
+    // ターミナル(ガラス張り)
+    ctx.fillStyle = '#f4f0e8'; ctx.fillRect(x, base - 60, 210, 60); ctx.strokeRect(x, base - 60, 210, 60);
+    ctx.fillStyle = '#9fc0cf'; ctx.fillRect(x + 10, base - 46, 190, 30);
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5;
+    for (let gx = x + 20; gx < x + 200; gx += 16) { ctx.beginPath(); ctx.moveTo(gx, base - 46); ctx.lineTo(gx, base - 16); ctx.stroke(); }
+    line(2); ctx.fillStyle = '#f4f0e8';
+    ctx.beginPath(); ctx.moveTo(x - 8, base - 60); ctx.quadraticCurveTo(x + 105, base - 84, x + 218, base - 60); ctx.closePath(); ctx.fill(); ctx.stroke();
+    nameBoard('高松空港', 'TAKAMATSU AIRPORT', x + 105, base - 120);
+  }
+  function drawPlane(x, y, s, tilt) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(tilt); ctx.scale(s, s);
+    ctx.fillStyle = '#fbfbfb'; line(2);
+    ctx.beginPath(); ctx.ellipse(0, 0, 40, 7, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-4, 2); ctx.lineTo(10, 22); ctx.lineTo(18, 22); ctx.lineTo(10, 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(28, -2); ctx.lineTo(38, -18); ctx.lineTo(42, -18); ctx.lineTo(40, -2); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#2e5a8a'; ctx.fillRect(-30, -2, 52, 2.5);
+    ctx.restore();
+  }
+  function stageAirport(lm) {
+    drawSky('#cfe6f4', '#f1f3ee');
+    drawClouds();
+    // 飛び立つ飛行機
+    const p = wrapX(S.t * 1.2, W + 300);
+    drawPlane(W + 100 - p, 300 - p * 0.35, 0.9, 0.3);
+    // 丘と芝生
+    ctx.fillStyle = '#c3cfa6';
+    const off = wrapX(-S.scroll * 0.08, 600);
+    for (let k = -1; k < 2; k++) {
+      const bx = off + k * 600;
+      ctx.beginPath(); ctx.moveTo(bx, 470); ctx.quadraticCurveTo(bx + 150, 380, bx + 300, 470); ctx.quadraticCurveTo(bx + 450, 400, bx + 600, 470); ctx.fill();
+    }
+    ctx.fillStyle = '#b4c393'; ctx.fillRect(0, 470, W, GROUND - 470);
+    if (lm) drawAirport(lm.x);
+    // 誘導灯
+    const lo = wrapX(-S.scroll * 0.9, 50);
+    for (let x = lo - 50; x < W + 50; x += 50) {
+      ctx.fillStyle = (Math.floor(S.t / 15) + x) % 2 ? '#f2c94c' : '#e07a5f';
+      ctx.beginPath(); ctx.arc(x, 540, 3, 0, 7); ctx.fill();
+    }
+    // 滑走路
+    ctx.fillStyle = '#80868c'; ctx.fillRect(0, GROUND, W, H - GROUND);
+    line(2.5); ctx.beginPath(); ctx.moveTo(0, GROUND); ctx.lineTo(W, GROUND); ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, GROUND + 8, W, 4);
+    const doff = wrapX(-S.scroll, 90);
+    for (let x = doff - 90; x < W + 90; x += 90) ctx.fillRect(x, GROUND + 62, 50, 6);
+  }
+
+  // --- 3: 東京スカイツリー ---
+  function drawSkytree(x) {
+    const base = 470, top = 70, cx = x + 40;
+    // 塔体(下が三角、上に行くほど丸く細い)
+    ctx.fillStyle = '#e4edf3'; line(2);
+    ctx.beginPath();
+    ctx.moveTo(cx - 40, base); ctx.lineTo(cx - 14, base - 220); ctx.lineTo(cx - 8, top + 60);
+    ctx.lineTo(cx + 8, top + 60); ctx.lineTo(cx + 14, base - 220); ctx.lineTo(cx + 40, base); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = 'rgba(110,140,165,0.55)'; ctx.lineWidth = 1;
+    for (let y = base - 10; y > top + 70; y -= 14) {
+      const t = (base - y) / (base - top);
+      const hw = 40 - t * 34;
+      ctx.beginPath(); ctx.moveTo(cx - hw, y); ctx.lineTo(cx + hw, y - 14); ctx.moveTo(cx + hw, y); ctx.lineTo(cx - hw, y - 14); ctx.stroke();
+    }
+    // 展望台
+    line(2); ctx.fillStyle = '#cfdde8';
+    rr(cx - 20, base - 250, 40, 18, 4); ctx.fill(); ctx.stroke();
+    rr(cx - 13, base - 320, 26, 12, 4); ctx.fill(); ctx.stroke();
+    // アンテナ
+    ctx.beginPath(); ctx.moveTo(cx, top + 60); ctx.lineTo(cx, top); ctx.stroke();
+    nameBoard('東京スカイツリー', 'TOKYO SKYTREE', cx + 100, base - 190, '#4a6a8a');  // 手前のビルに隠れないよう横に
+  }
+  function stageSkytree(lm) {
+    drawSky('#d3e7f6', '#f2f0ec');
+    drawClouds();
+    drawSkyline(470, 600, 0.1, '#d7dde3', 110, 3);
+    if (lm) drawSkytree(lm.x);
+    drawSkyline(500, 520, 0.4, '#c3ccd5', 90, 7, 'rgba(255,255,255,0.7)');
+    ctx.fillStyle = '#a9b1b8'; ctx.fillRect(0, 500, W, GROUND - 500);
+    // ガードレール
+    const fo = wrapX(-S.scroll, 60);
+    line(2, '#6e7680');
+    ctx.fillStyle = '#f4f4f4'; ctx.fillRect(0, GROUND - 28, W, 8);
+    ctx.beginPath(); ctx.moveTo(0, GROUND - 28); ctx.lineTo(W, GROUND - 28); ctx.moveTo(0, GROUND - 20); ctx.lineTo(W, GROUND - 20); ctx.stroke();
+    for (let x = fo - 60; x < W + 60; x += 60) { ctx.beginPath(); ctx.moveTo(x, GROUND - 28); ctx.lineTo(x, GROUND); ctx.stroke(); }
+    drawGround('#d9dadb', 'rgba(46,46,46,0.2)', COL.dark, 60);
+  }
+
+  // --- 4: 東京タワー(夕方) ---
+  function drawTokyoTower(x) {
+    const base = 470, top = 110, cx = x + 60;
+    const leg = (s) => {   // s: -1 左, 1 右
+      ctx.beginPath();
+      ctx.moveTo(cx + s * 60, base); ctx.quadraticCurveTo(cx + s * 24, base - 120, cx + s * 10, base - 230);
+      ctx.lineTo(cx + s * 4, top + 40); ctx.stroke();
+    };
+    // 紅白のしま(下から)
+    const bands = 7;
+    for (let i = 0; i < bands; i++) {
+      const y1 = base - (base - top - 40) * i / bands, y2 = base - (base - top - 40) * (i + 1) / bands;
+      const w1 = widthAt(y1), w2 = widthAt(y2);
+      ctx.fillStyle = i % 2 ? '#f6f1ea' : '#e1573a';
+      ctx.beginPath(); ctx.moveTo(cx - w1, y1); ctx.lineTo(cx - w2, y2); ctx.lineTo(cx + w2, y2); ctx.lineTo(cx + w1, y1); ctx.closePath(); ctx.fill();
+    }
+    function widthAt(y) { const t = (base - y) / (base - top - 40); return 60 * Math.pow(1 - t, 2.2) + 4; }
+    // 鉄骨の線
+    line(2); leg(-1); leg(1);
+    ctx.strokeStyle = 'rgba(46,46,46,0.35)'; ctx.lineWidth = 1;
+    for (let y = base - 12; y > top + 50; y -= 16) {
+      const w = widthAt(y), w2 = widthAt(y - 16);
+      ctx.beginPath(); ctx.moveTo(cx - w, y); ctx.lineTo(cx + w2, y - 16); ctx.moveTo(cx + w, y); ctx.lineTo(cx - w2, y - 16); ctx.stroke();
+    }
+    // 展望台
+    line(2); ctx.fillStyle = '#f6f1ea';
+    rr(cx - 26, base - 150, 52, 16, 3); ctx.fill(); ctx.stroke();
+    rr(cx - 10, base - 260, 20, 10, 3); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#e1573a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(cx, top + 40); ctx.lineTo(cx, top); ctx.stroke();
+    nameBoard('東京タワー', 'TOKYO TOWER', cx + 95, base - 200, '#b5442f');
+  }
+  function stageTokyoTower(lm) {
+    drawSky('#8f87b8', '#f6c49a');
+    // 夕日
+    ctx.fillStyle = 'rgba(255,214,150,0.9)'; ctx.beginPath(); ctx.arc(300, 380, 44, 0, 7); ctx.fill();
+    drawClouds('rgba(255,236,220,0.8)');
+    drawSkyline(470, 600, 0.1, '#9d8fae', 120, 5, 'rgba(255,230,150,0.6)');
+    if (lm) drawTokyoTower(lm.x);
+    drawSkyline(500, 520, 0.4, '#6f6584', 90, 9, 'rgba(255,220,130,0.9)');
+    ctx.fillStyle = '#5b5470'; ctx.fillRect(0, 500, W, GROUND - 500);
+    streetLamps('#3a3548');
+    drawGround('#cfc6c8', 'rgba(46,46,46,0.2)', COL.dark, 60);
+  }
+
+  // --- 5: 宇宙(月面を走る) ---
+  const STARS = Array.from({ length: 70 }, (_, i) => ({ x: (i * 97) % 400, y: (i * 53) % 420, r: (i % 3) * 0.5 + 0.8, p: i * 0.7 }));
+  function drawSatellite(x) {
+    const y = 180 + Math.sin(S.t * 0.02) * 6;
+    line(2);
+    ctx.fillStyle = '#3f6fb0'; ctx.fillRect(x, y - 8, 46, 16); ctx.strokeRect(x, y - 8, 46, 16);
+    ctx.fillRect(x + 90, y - 8, 46, 16); ctx.strokeRect(x + 90, y - 8, 46, 16);
+    ctx.fillStyle = '#e8e3d8'; rr(x + 50, y - 14, 36, 28, 4); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x + 46, y); ctx.lineTo(x + 50, y); ctx.moveTo(x + 86, y); ctx.lineTo(x + 90, y); ctx.stroke();
+    nameBoard('宇宙', 'SPACE', x + 68, y + 30, '#3a3a6a');
+  }
+  function stageSpace(lm) {
+    drawSky('#05061a', '#2a2357', 560);
+    for (const s of STARS) {
+      const tw = 0.5 + Math.sin(S.t * 0.05 + s.p) * 0.5;
+      ctx.fillStyle = `rgba(255,255,255,${0.4 + tw * 0.6})`;
+      ctx.beginPath(); ctx.arc(wrapX(s.x - S.scroll * 0.02, W), s.y, s.r, 0, 7); ctx.fill();
+    }
+    // 地球
+    const ex = 290, ey = 170;
+    ctx.fillStyle = '#4f8fd6'; ctx.beginPath(); ctx.arc(ex, ey, 56, 0, 7); ctx.fill();
+    ctx.save(); ctx.beginPath(); ctx.arc(ex, ey, 56, 0, 7); ctx.clip();
+    ctx.fillStyle = '#7cbf6a';
+    ctx.beginPath(); ctx.ellipse(ex - 18, ey - 10, 22, 14, 0.5, 0, 7); ctx.ellipse(ex + 20, ey + 18, 18, 10, -0.4, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.beginPath(); ctx.ellipse(ex + 4, ey - 34, 30, 6, 0.1, 0, 7); ctx.ellipse(ex - 10, ey + 30, 24, 5, -0.2, 0, 7); ctx.fill();
+    ctx.restore();
+    // 流れ星
+    const sp = S.t % 240;
+    if (sp < 30) {
+      ctx.strokeStyle = `rgba(255,255,255,${1 - sp / 30})`; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(60 + sp * 6, 60 + sp * 3); ctx.lineTo(30 + sp * 6, 45 + sp * 3); ctx.stroke();
+    }
+    if (lm) drawSatellite(lm.x);
+    // 月の地平線
+    ctx.fillStyle = '#8d8c99';
+    const off = wrapX(-S.scroll * 0.15, 500);
+    for (let k = -1; k < 2; k++) {
+      const bx = off + k * 500;
+      ctx.beginPath(); ctx.moveTo(bx, 520); ctx.quadraticCurveTo(bx + 120, 470, bx + 250, 515); ctx.quadraticCurveTo(bx + 380, 480, bx + 500, 520); ctx.lineTo(bx + 500, GROUND); ctx.lineTo(bx, GROUND); ctx.fill();
+    }
+    // 月面(クレーター)
+    ctx.fillStyle = '#bdbcc6'; ctx.fillRect(0, GROUND, W, H - GROUND);
+    line(2.5); ctx.beginPath(); ctx.moveTo(0, GROUND); ctx.lineTo(W, GROUND); ctx.stroke();
+    const co = wrapX(-S.scroll, 260);
+    ctx.fillStyle = '#a5a4b0';
+    for (let x = co - 260; x < W + 260; x += 260) {
+      ctx.beginPath(); ctx.ellipse(x + 40, GROUND + 40, 34, 9, 0, 0, 7); ctx.ellipse(x + 170, GROUND + 95, 22, 6, 0, 0, 7); ctx.ellipse(x + 210, GROUND + 30, 12, 4, 0, 0, 7); ctx.fill();
+    }
+  }
+
+  const STAGE_DRAW = [stageKasuga, stageStation, stageAirport, stageSkytree, stageTokyoTower, stageSpace];
+  function drawStage(i) {
+    const lm = [S.landmark, S.prevLandmark].find(l => l && l.stage === i) || null;
+    STAGE_DRAW[i](lm);
+  }
+  function drawBG() {
+    const FADE = 90;
+    if (S.stageT < FADE && S.prevStage !== S.stage) {
+      drawStage(S.prevStage);
+      ctx.save(); ctx.globalAlpha = S.stageT / FADE; drawStage(S.stage); ctx.restore();
+    } else drawStage(S.stage);
+  }
+
+  // ===== メートル表示とステージ到着の表示 =====
+  function drawMeter() {
+    const m = meters(), st = S.stage, next = STAGES[st + 1];
+    ctx.fillStyle = 'rgba(244,241,236,0.94)'; rr(W / 2 - 74, 10, 148, 50, 25); ctx.fill(); line(2.5); ctx.stroke();
+    ctx.font = `bold 30px ${FONT}`;
+    const numW = ctx.measureText(String(m)).width;
+    text(String(m), W / 2 - 10 + numW / 2, 36, 30, COL.dark, 'right');
+    text('m', W / 2 - 6 + numW / 2, 40, 18, COL.dark, 'left');
+    if (next) {
+      const p = (m - STAGES[st].at) / (next.at - STAGES[st].at);
+      ctx.fillStyle = 'rgba(244,241,236,0.94)'; rr(W / 2 - 90, 66, 180, 36, 10); ctx.fill();
+      text(`次は${next.name} あと${next.at - m}m`, W / 2, 78, 11, '#3d3830');
+      ctx.fillStyle = COL.light; rr(W / 2 - 78, 88, 156, 7, 3.5); ctx.fill();
+      ctx.fillStyle = '#e1573a'; rr(W / 2 - 78, 88, Math.max(7, 156 * p), 7, 3.5); ctx.fill();
+    } else {
+      ctx.fillStyle = 'rgba(244,241,236,0.94)'; rr(W / 2 - 80, 66, 160, 24, 10); ctx.fill();
+      text('宇宙をどこまでも！', W / 2, 78, 12, '#3d3830');
+    }
+  }
+  function drawStageBanner() {
+    const b = S.stageBanner;
+    const a = Math.min(1, b.t / 20, (170 - b.t) / 12);
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(46,46,46,0.88)'; rr(30, 330, W - 60, 60, 30); ctx.fill();
+    text(b.sub, W / 2, 348, 13, '#f2c94c');
+    text(b.text, W / 2, 372, 20, '#fff');
+    ctx.restore();
+  }
+
   // ===== HUD・画面 =====
   function drawHUD() {
-    text(`${S.score}`, 20, 34, 30, COL.dark, 'left');
+    // 暗いステージでも読めるように下地を敷く
+    ctx.fillStyle = 'rgba(244,241,236,0.88)';
+    rr(8, 12, 112, 94, 14); ctx.fill();
+    rr(8, 110, 166, 28, 14); ctx.fill();
+    text(`${S.score}`, 20, 34, 26, COL.dark, 'left');
     text(`ベスト ${S.best}`, 20, 64, 15, '#6f675c', 'left');
     ctx.save(); ctx.translate(30, 92); ctx.scale(0.7, 0.7);
     ctx.fillStyle = COL.paper; line(2.5); stoneShape(); ctx.fill(); ctx.stroke();
@@ -762,6 +1251,8 @@
       ctx.save(); ctx.translate(x, y); ctx.scale(0.5, 0.5);
       ctx.globalAlpha = have ? 1 : 0.18; drawSpecialIcon(sp.id); ctx.restore();
     });
+    drawMeter();
+    if (S.stageBanner) drawStageBanner();
     if (S.banner) drawBanner();
     if (S.graveAlert > 0) {
       const a = Math.min(1, S.graveAlert / 15) * (Math.floor(S.graveAlert / 8) % 2 ? 1 : 0.75);
@@ -822,7 +1313,7 @@
     text('わらいしくん', 0, 0, 46);
     ctx.restore();
     text('ラン', W / 2, y + 50, 40);
-    text('～ 春日川ぞいを走れ！ ～', W / 2, y + 90, 17, '#6f675c');
+    text('～ 高松から宇宙まで走れ！ ～', W / 2, y + 90, 17, '#6f675c');
   }
   function tapPill(label) {
     const sc = 1 + Math.sin(S.t * 0.1) * 0.04;
@@ -850,6 +1341,30 @@
     button('ゲームスタート', 60, 252, W - 120, 62, () => go('start'), 'main', ICON.play);
     button('ランキング', 60, 328, W - 120, 52, () => go('ranking'), 'sub', ICON.crown);
     button('取得したアイテム', 60, 394, W - 120, 52, () => go('items'), 'sub', ICON.bag);
+    button('クレジット・利用規約', W / 2 - 110, 636, 220, 40, () => go('credits'), 'small');
+  }
+
+  // ===== クレジット・利用規約 =====
+  function drawCredits() {
+    backButton();
+    screenTitle('クレジット・利用規約');
+    panel(24, 134, W - 48, 470);
+    text('BGM', 48, 162, 13, '#6f675c', 'left');
+    if (musicKind() === 'file') {
+      text('「情動カタルシス」', 44, 188, 18, COL.dark, 'left');
+      text('作曲: まんぼう二等兵', 48, 214, 14, COL.dark, 'left', 'normal');
+      text('フリーBGM OpenTracks(旧DOVA-SYNDROME)', 48, 236, 12, '#5c554b', 'left', 'normal');
+    } else {
+      text('オリジナルBGM', 48, 188, 18, COL.dark, 'left');
+      text('このゲーム用に作った曲を自動演奏しています', 48, 214, 12, '#5c554b', 'left', 'normal');
+    }
+    text('キャラクター', 48, 270, 13, '#6f675c', 'left');
+    text('わらいしくん', 48, 294, 17, COL.dark, 'left');
+    ctx.fillStyle = COL.light; rr(38, 322, W - 76, 268, 12); ctx.fill();
+    text('利用規約', W / 2, 344, 16);
+    wrapText('このゲームで使っている音楽・画像などの素材を、ゲームから取り出して、ゲーム以外の目的で使うこと(複製・保存・再配布・転載など)を禁止します。', W / 2, 376, W - 110, 21, 13);
+    wrapText('遊ぶ人は、この規約を守ってください。', W / 2, 452, W - 110, 21, 13);
+    wrapText('違反が見つかった場合は、利用の中止や削除のお願いなど、適切な対応を行います。', W / 2, 488, W - 110, 21, 13);
   }
 
   // ===== ゲームスタート画面(あそびかた) =====
@@ -872,7 +1387,7 @@
       text(k, 109, y, 13, COL.dark);
       text(v, 184, y, 15, COL.dark, 'left', 'normal');
     });
-    text(`ベストスコア ${S.best}`, W / 2, 418, 14, '#6f675c');
+    text(`1000mごとに景色が変わる！ 宇宙までいけるかな？`, W / 2, 418, 13, '#6f675c');
     tapPill('タップしてスタート');
   }
 
@@ -948,7 +1463,7 @@
       ctx.fillStyle = COL.light; rr(W / 2 - 80, 218, 160, 28, 14); ctx.fill();
       text(`ランキング ${S.rankPos}位！`, W / 2, 232, 16);
     } else text(`ベスト ${S.best}`, W / 2, 232, 16, '#6f675c');
-    text(`きょり ${Math.floor(S.dist / 10)}m ／ かけら ${S.stones}こ`, W / 2, 264, 14, COL.dark, 'center', 'normal');
+    text(`きょり ${meters()}m(${STAGES[S.stage].name}) ／ かけら ${S.stones}こ`, W / 2, 264, 14, COL.dark, 'center', 'normal');
     text(`今回とった香川の特産品 ${S.got.length} / ${SPECIALS.length}`, W / 2, 292, 13, '#6f675c');
     SPECIALS.forEach((sp, i) => {
       ctx.save(); ctx.translate(W / 2 - 96 + i * 48, 324); ctx.scale(0.7, 0.7);
@@ -989,6 +1504,7 @@
     if (S.mode === 'start') drawStart();
     if (S.mode === 'ranking') drawRanking();
     if (S.mode === 'items') drawItems();
+    if (S.mode === 'credits') drawCredits();
     if (S.mode === 'over') drawOver();
   }
 
@@ -1003,7 +1519,7 @@
   requestAnimationFrame(loop);
 
   // 動作確認用(URLに ?debug を付けたときだけ)
-  if (location.search.includes('debug')) window.__G = { S, P, spawnSpecial, spawnGrave };
+  if (location.search.includes('debug')) window.__G = { S, P, spawnSpecial, spawnGrave, Music };
 })();
 </script>
 </body>
