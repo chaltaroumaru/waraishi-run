@@ -87,10 +87,30 @@
 
   // ===== BGM =====
   // 使いたい曲: 「情動カタルシス」(作曲: まんぼう二等兵 / フリーBGM OpenTracks ※旧DOVA-SYNDROME)
-  // OpenTracksの規約では、利用者が音源ファイルを取り出せる状態での組み込み・音源の再配布が禁止されている。
-  // そのため mp3 は公開リポジトリには入れない(.gitignore で assets/bgm/ を除外)。
-  // assets/bgm/bgm.mp3 が置いてあるときだけそれを流し、無いときはゲーム内で自動演奏するオリジナル曲を流す。
+  // OpenTracksの規約では、利用者が音源ファイルをそのまま取り出せる状態での組み込みが禁止されている。
+  // 対策:
+  //   1. 元の mp3 は公開しない(.gitignore で assets/bgm/ を除外)
+  //   2. 公開するのは tools/pack_bgm.py で変換した assets/data/bgm.dat だけ(そのままでは再生できない)
+  //   3. ゲーム内の「クレジット・利用規約」とスタート画面で、素材の抽出・ゲーム外利用の禁止を案内
+  // bgm.dat → (手元で試す用の)bgm.mp3 → 無ければゲーム内で自動演奏するオリジナル曲、の順で使う。
+  const BGM_PACKED = 'assets/data/bgm.dat';
   const BGM_FILE = 'assets/bgm/bgm.mp3';
+  const BGM_KEY = new TextEncoder().encode('waraishi-aji-stone-run');  // tools/pack_bgm.py の KEY と同じ
+  function unpackBgm(ab) {
+    const src = new Uint8Array(ab);
+    if (String.fromCharCode(...src.subarray(0, 4)) !== 'WRSI') return null;
+    const out = new Uint8Array(src.length - 4);
+    for (let i = 0; i < out.length; i++) out[i] = src[i + 4] ^ BGM_KEY[i % BGM_KEY.length] ^ ((i * 31) & 0xff);
+    return out.buffer;
+  }
+  async function fetchBgmData() {
+    try {
+      const r = await fetch(BGM_PACKED);
+      if (r.ok) { const d = unpackBgm(await r.arrayBuffer()); if (d) return d; }
+    } catch (_) {}
+    const r = await fetch(BGM_FILE, { cache: 'no-store' });
+    return r.ok ? r.arrayBuffer() : null;
+  }
   const BGM_LOOP = [6.486, 129.729];   // 曲ページに記載のループ位置(始点・終点 秒)
   const Music = { buf: null, tried: false, src: null, gain: null, timer: null, playing: false, next: 0, step: 0 };
   const musicKind = () => (Music.buf ? 'file' : 'synth');
@@ -103,9 +123,8 @@
     if (Music.tried) return;
     Music.tried = true;
     try {
-      const r = await fetch(BGM_FILE, { cache: 'no-store' });
-      if (!r.ok) return;
-      const data = await r.arrayBuffer();
+      const data = await fetchBgmData();
+      if (!data) return;
       const buf = await new Promise((ok, ng) => ensureAudio().decodeAudioData(data, ok, ng));
       Music.buf = buf;
       if (Music.playing) { stopMusic(0.2); setTimeout(startMusic, 260); }  // 合成音から差し替え
@@ -1370,7 +1389,7 @@
   // ===== ゲームスタート画面(あそびかた) =====
   function drawStart() {
     backButton();
-    screenTitle('ゲームスタート', 'じゅんびはいい？');
+    screenTitle('ゲームスタート', '1000mごとに景色が変わる！宇宙までいけるかな？');
     panel(30, 138, W - 60, 300);
     text('あそびかた', W / 2, 164, 18);
     const rows = [
@@ -1382,12 +1401,14 @@
       ['あつめる', '香川の特産品 +100'],
     ];
     rows.forEach(([k, v], i) => {
-      const y = 200 + i * 38;
+      const y = 198 + i * 36;
       ctx.fillStyle = COL.light; rr(50, y - 14, 118, 28, 14); ctx.fill();
       text(k, 109, y, 13, COL.dark);
       text(v, 184, y, 15, COL.dark, 'left', 'normal');
     });
-    text(`1000mごとに景色が変わる！ 宇宙までいけるかな？`, W / 2, 418, 13, '#6f675c');
+    // 音楽の案内と利用規約(音源の抽出・ゲーム外利用の禁止)
+    text('🎵 音楽が流れます(音量に注意してね)', W / 2, 408, 12, COL.dark);
+    text('音楽・画像の抽出やゲーム外での利用は禁止です(利用規約)', W / 2, 426, 11, '#5c554b', 'center', 'normal');
     tapPill('タップしてスタート');
   }
 
